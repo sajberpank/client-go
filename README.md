@@ -38,7 +38,7 @@ Sajberpank delivers hybrid semantic and keyword search with **Zero-Knowledge Bli
 ## Features
 
 - **Zero-Knowledge Security**: End-to-end asymmetric encryption using Go 1.26 standard library `crypto/hpke` (`DHKEM_X25519`, `DHKEM_P256`, and post-quantum `MLKEM768_X25519`).
-- **Type-Safe Ingestion Variants**: Compile-time sealed interface for document content (`sajberpank.Text`, `sajberpank.Pages`, and `sajberpank.Sentences`).
+- **Type-Safe Ingestion Variants**: Go 1.27 constrained type union and generic options for document content (`sajberpank.Text`, `sajberpank.Pages`, and `sajberpank.Sentences`).
 - **Hybrid Retrieval**: Combines dense semantic vector similarity with sparse BM25 keyword search and temporal score decay.
 - **Similarity & Negative Recommendations**: Recommend similar documents with positive/negative examples and configurable fusion strategies (`average_vector`, `best_score`, `sum_scores`).
 - **Zero External Dependencies**: Implemented strictly using the Go standard library for maximum security, performance, and minimal footprint.
@@ -52,7 +52,7 @@ Sajberpank delivers hybrid semantic and keyword search with **Zero-Knowledge Bli
 go get sajberpank.rs/sajberpank
 ```
 
-> **Requirements**: **Go 1.26 or later** (requires standard library `crypto/hpke`).
+> **Requirements**: **Go 1.27 or later** (requires Go 1.27 method type parameters and standard library `crypto/hpke`).
 
 ---
 
@@ -152,14 +152,14 @@ fmt.Printf("Registered public key %q (KEM: %s, AEAD: %s)\n", key.Name, key.KEM, 
 
 ### 2. Ingesting Documents (Type-Safe Content)
 
-The client enforces explicit typing via the `sajberpank.Content` sealed interface:
+The client enforces compile-time type constraints via generic `sajberpank.DocumentOptions[C sajberpank.Content]` and the `sajberpank.Content` type union (`Text | Pages | Sentences`):
 
 #### A. Plain Text (`sajberpank.Text`)
 
 ```go
 docTimestamp := time.Now().UTC()
 
-result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions{
+result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Text]{
 	Namespace:    "legal-corp",
 	Category:     "contracts",
 	ID:           "CTR-2026-001",
@@ -180,7 +180,7 @@ fmt.Printf("Document added: %s (namespace: %s)\n", result.ID, result.Namespace)
 #### B. Paginated Document (`sajberpank.Pages`)
 
 ```go
-result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions{
+result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Pages]{
 	Namespace: "legal-corp",
 	Category:  "filings",
 	ID:        "FIL-2026-902",
@@ -201,7 +201,7 @@ result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions{
 #### C. Structured Sentences (`sajberpank.Sentences`)
 
 ```go
-result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions{
+result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Sentences]{
 	Namespace: "legal-corp",
 	Category:  "opinions",
 	ID:        "OPN-2026-441",
@@ -473,7 +473,7 @@ if err := apiClient.Account.Keys.Revoke(ctx, key.ID); err != nil {
 Errors returned by the client provide structured validation diagnostics and standard sentinel error matching:
 
 ```go
-_, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions{
+_, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Text]{
 	Namespace: "legal-corp",
 	Category:  "contracts",
 	ID:        "CTR-001",

@@ -33,22 +33,18 @@ type Text string
 type Pages []Page
 type Sentences []Sentence
 
-// Content is a sealed interface constraint allowing only Text, Pages, or Sentences.
+// Content is a type constraint allowing only Text, Pages, or Sentences.
 type Content interface {
-	isContent()
+	Text | Pages | Sentences
 }
 
-func (Text) isContent()      {}
-func (Pages) isContent()     {}
-func (Sentences) isContent() {}
-
-// DocumentOptions contains parameters for ingesting a document.
-type DocumentOptions struct {
+// DocumentOptions contains parameters for ingesting a document parameterized by content type.
+type DocumentOptions[C Content] struct {
 	Namespace       string
 	Category        string
 	ID              string
 	KeyName         string
-	Content         Content
+	Content         C
 	DocumentTime    *time.Time
 	Fields          map[string]string
 	WithoutKeywords *bool
@@ -135,7 +131,7 @@ func toSentenceBodies(sentences []Sentence) []sentenceBody {
 }
 
 // Add ingests and seals a document under the specified namespace and category.
-func (s *DocumentsService) Add(ctx context.Context, o DocumentOptions) (*AddDocumentResult, error) {
+func (s *DocumentsService) Add[C Content](ctx context.Context, o DocumentOptions[C]) (*AddDocumentResult, error) {
 	if strings.TrimSpace(o.Namespace) == "" {
 		return nil, ErrInvalidNamespace
 	}
@@ -159,15 +155,22 @@ func (s *DocumentsService) Add(ctx context.Context, o DocumentOptions) (*AddDocu
 		WithoutKeywords: o.WithoutKeywords,
 	}
 
-	switch c := o.Content.(type) {
+	switch c := any(o.Content).(type) {
 	case Text:
+		if strings.TrimSpace(string(c)) == "" {
+			return nil, ErrMissingDocumentContent
+		}
 		body.Text = string(c)
 	case Pages:
+		if len(c) == 0 {
+			return nil, ErrMissingDocumentContent
+		}
 		body.Pages = toPageBodies(c)
 	case Sentences:
+		if len(c) == 0 {
+			return nil, ErrMissingDocumentContent
+		}
 		body.Sentences = toSentenceBodies(c)
-	case nil:
-		return nil, ErrMissingDocumentContent
 	default:
 		return nil, ErrInvalidDocumentContent
 	}
