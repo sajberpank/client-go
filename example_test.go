@@ -91,7 +91,7 @@ func ExampleDocumentsService_Add() {
 	docTimestamp := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 
 	// A. Plain Text Ingestion
-	result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions{
+	result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Text]{
 		Namespace:    "legal-corp",
 		Category:     "contracts",
 		ID:           "CTR-2026-001",
@@ -109,7 +109,7 @@ func ExampleDocumentsService_Add() {
 	fmt.Printf("Document added: %s (namespace: %s)\n", result.ID, result.Namespace)
 
 	// B. Paginated Document Ingestion
-	_, _ = apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions{
+	_, _ = apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Pages]{
 		Namespace: "legal-corp",
 		Category:  "filings",
 		ID:        "FIL-2026-902",
@@ -121,7 +121,7 @@ func ExampleDocumentsService_Add() {
 	})
 
 	// C. Structured Sentences with Citation Tracking
-	_, _ = apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions{
+	_, _ = apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Sentences]{
 		Namespace: "legal-corp",
 		Category:  "opinions",
 		ID:        "OPN-2026-441",
@@ -435,7 +435,7 @@ func Example_errorHandling() {
 	u, _ := url.Parse(ts.URL)
 	apiClient := sajberpank.New("test-key", &sajberpank.ClientOptions{BaseURL: u})
 
-	_, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions{
+	_, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Text]{
 		Namespace: "legal-corp",
 		Category:  "contracts",
 		ID:        "CTR-001",

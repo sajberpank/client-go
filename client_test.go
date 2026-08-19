@@ -280,7 +280,7 @@ func TestDocumentsService(t *testing.T) {
 		})
 
 		ts := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
-		resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions{
+		resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Text]{
 			Namespace:    "insureme",
 			Category:     "policy",
 			ID:           "POL-12345",
@@ -314,7 +314,7 @@ func TestDocumentsService(t *testing.T) {
 			})
 		})
 
-		resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions{
+		resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Pages]{
 			Namespace: "insureme",
 			Category:  "report",
 			ID:        "REP-100",
@@ -348,7 +348,7 @@ func TestDocumentsService(t *testing.T) {
 			})
 		})
 
-		resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions{
+		resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Sentences]{
 			Namespace: "insureme",
 			Category:  "contract",
 			ID:        "CTR-100",
@@ -365,17 +365,34 @@ func TestDocumentsService(t *testing.T) {
 		}
 	})
 
-	t.Run("Add with nil Content fails client validation", func(t *testing.T) {
+	t.Run("Add with empty Content fails client validation", func(t *testing.T) {
 		c := client.New(testAPIKey, nil)
-		_, err := c.Search.Documents.Add(ctx, client.DocumentOptions{
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Text]{
 			Namespace: "insureme",
 			Category:  "policy",
 			ID:        "POL-1",
 			KeyName:   "key",
-			Content:   nil,
-		})
-		if !errors.Is(err, client.ErrMissingDocumentContent) {
-			t.Errorf("expected ErrMissingDocumentContent, got %v", err)
+			Content:   client.Text(""),
+		}); !errors.Is(err, client.ErrMissingDocumentContent) {
+			t.Errorf("expected ErrMissingDocumentContent for empty Text, got %v", err)
+		}
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Pages]{
+			Namespace: "insureme",
+			Category:  "policy",
+			ID:        "POL-1",
+			KeyName:   "key",
+			Content:   client.Pages{},
+		}); !errors.Is(err, client.ErrMissingDocumentContent) {
+			t.Errorf("expected ErrMissingDocumentContent for empty Pages, got %v", err)
+		}
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Sentences]{
+			Namespace: "insureme",
+			Category:  "policy",
+			ID:        "POL-1",
+			KeyName:   "key",
+			Content:   client.Sentences{},
+		}); !errors.Is(err, client.ErrMissingDocumentContent) {
+			t.Errorf("expected ErrMissingDocumentContent for empty Sentences, got %v", err)
 		}
 	})
 
@@ -721,7 +738,7 @@ func TestErrors(t *testing.T) {
 				},
 			})
 		})
-		_, err = c3.Search.Documents.Add(ctx, client.DocumentOptions{
+		_, err = c3.Search.Documents.Add(ctx, client.DocumentOptions[client.Text]{
 			Namespace: "test",
 			Category:  "test",
 			ID:        "doc-1",
@@ -924,16 +941,16 @@ func TestErrors(t *testing.T) {
 		}
 
 		// Documents.Add validation
-		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions{Namespace: "", Category: "policy", ID: "1", KeyName: "k", Content: client.Text("hi")}); !errors.Is(err, client.ErrInvalidNamespace) {
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Text]{Namespace: "", Category: "policy", ID: "1", KeyName: "k", Content: client.Text("hi")}); !errors.Is(err, client.ErrInvalidNamespace) {
 			t.Errorf("expected ErrInvalidNamespace, got %v", err)
 		}
-		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions{Namespace: "ns", Category: "", ID: "1", KeyName: "k", Content: client.Text("hi")}); !errors.Is(err, client.ErrInvalidCategory) {
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Text]{Namespace: "ns", Category: "", ID: "1", KeyName: "k", Content: client.Text("hi")}); !errors.Is(err, client.ErrInvalidCategory) {
 			t.Errorf("expected ErrInvalidCategory, got %v", err)
 		}
-		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions{Namespace: "ns", Category: "cat", ID: "", KeyName: "k", Content: client.Text("hi")}); !errors.Is(err, client.ErrInvalidDocumentID) {
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Text]{Namespace: "ns", Category: "cat", ID: "", KeyName: "k", Content: client.Text("hi")}); !errors.Is(err, client.ErrInvalidDocumentID) {
 			t.Errorf("expected ErrInvalidDocumentID, got %v", err)
 		}
-		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions{Namespace: "ns", Category: "cat", ID: "1", KeyName: "", Content: client.Text("hi")}); !errors.Is(err, client.ErrInvalidKeyName) {
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Text]{Namespace: "ns", Category: "cat", ID: "1", KeyName: "", Content: client.Text("hi")}); !errors.Is(err, client.ErrInvalidKeyName) {
 			t.Errorf("expected ErrInvalidKeyName, got %v", err)
 		}
 
