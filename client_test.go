@@ -706,6 +706,44 @@ func TestErrors(t *testing.T) {
 		if err.Error() != "forbidden" {
 			t.Errorf("got %q, want 'forbidden'", err.Error())
 		}
+
+		// With structured quota_exceeded error
+		c3, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code":    403,
+				"message": "Forbidden",
+				"errors": []map[string]any{
+					{
+						"reason":  client.ReasonQuotaExceeded,
+						"message": "document limit exceeded: current 10, max 10",
+					},
+				},
+			})
+		})
+		_, err = c3.Search.Documents.Add(ctx, client.DocumentOptions{
+			Namespace: "test",
+			Category:  "test",
+			ID:        "doc-1",
+			KeyName:   "key-1",
+			Content:   client.Text("hello"),
+		})
+		if !errors.Is(err, client.ErrForbidden) {
+			t.Errorf("expected ErrForbidden, got %v", err)
+		}
+		if !errors.Is(err, client.ErrQuotaExceeded) {
+			t.Errorf("expected ErrQuotaExceeded, got %v", err)
+		}
+		var forbErr *client.ForbiddenError
+		if !errors.As(err, &forbErr) {
+			t.Fatalf("expected *ForbiddenError, got %T", err)
+		}
+		if !forbErr.HasReason(client.ReasonQuotaExceeded) {
+			t.Errorf("expected HasReason(ReasonQuotaExceeded) to be true")
+		}
+		if len(forbErr.FieldErrors()) != 1 {
+			t.Errorf("expected 1 field error, got %d", len(forbErr.FieldErrors()))
+		}
 	})
 
 	t.Run("NotFound with and without message", func(t *testing.T) {

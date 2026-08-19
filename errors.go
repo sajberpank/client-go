@@ -61,6 +61,7 @@ const (
 	ReasonReservedPrefix           = "reserved_prefix"
 	ReasonCategoryNotInSearchScope = "category_not_in_search_scope"
 	ReasonMutuallyExclusive        = "mutually_exclusive"
+	ReasonQuotaExceeded            = "quota_exceeded"
 )
 
 // BadRequestError holds structured validation errors from an HTTP 400 response.
@@ -144,6 +145,68 @@ func (e *BadRequestError) FindByField(field string) []FieldError {
 	return matches
 }
 
+// ForbiddenError holds structured error details from an HTTP 403 response.
+type ForbiddenError struct {
+	message     string
+	fieldErrors []FieldError
+}
+
+// NewForbiddenError constructs a new ForbiddenError with provided field errors.
+func NewForbiddenError(fieldErrors ...FieldError) *ForbiddenError {
+	return &ForbiddenError{
+		fieldErrors: fieldErrors,
+	}
+}
+
+// Message returns the general error message from the forbidden response, if any.
+func (e *ForbiddenError) Message() string {
+	return e.message
+}
+
+func (e *ForbiddenError) Error() string {
+	if len(e.fieldErrors) == 0 {
+		if e.message != "" {
+			return fmt.Sprintf("forbidden: %s", e.message)
+		}
+		return "forbidden"
+	}
+	parts := make([]string, len(e.fieldErrors))
+	for i, fe := range e.fieldErrors {
+		parts[i] = fe.String()
+	}
+	if e.message != "" {
+		return fmt.Sprintf("forbidden: %s: %s", e.message, strings.Join(parts, "; "))
+	}
+	return fmt.Sprintf("forbidden: %s", strings.Join(parts, "; "))
+}
+
+// FieldErrors returns all error details.
+func (e *ForbiddenError) FieldErrors() []FieldError {
+	return e.fieldErrors
+}
+
+// HasReason returns true if any field error matches the reason.
+func (e *ForbiddenError) HasReason(reason string) bool {
+	for _, fe := range e.fieldErrors {
+		if fe.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+// Is reports whether this error matches target. It returns true for ErrForbidden
+// and, if any field error has ReasonQuotaExceeded, for ErrQuotaExceeded.
+func (e *ForbiddenError) Is(target error) bool {
+	if target == ErrForbidden {
+		return true
+	}
+	if target == ErrQuotaExceeded && e.HasReason(ReasonQuotaExceeded) {
+		return true
+	}
+	return false
+}
+
 // APIError represents an unexpected or non-2xx HTTP status response.
 type APIError struct {
 	StatusCode int
@@ -158,6 +221,7 @@ func (e *APIError) Error() string {
 var (
 	ErrUnauthorized           = errors.New("unauthorized")
 	ErrForbidden              = errors.New("forbidden")
+	ErrQuotaExceeded          = errors.New("quota exceeded")
 	ErrNotFound               = errors.New("not found")
 	ErrConflict               = errors.New("conflict")
 	ErrTooManyRequests        = errors.New("too many requests")
@@ -210,6 +274,16 @@ func handleErrorResponse(resp *http.Response) error {
 	case http.StatusUnauthorized:
 		return wrapSentinelError(ErrUnauthorized, payload.Message)
 	case http.StatusForbidden:
+		if len(payload.Errors) > 0 {
+			fieldErrors := make([]FieldError, len(payload.Errors))
+			for i, fe := range payload.Errors {
+				fieldErrors[i] = FieldError(fe)
+			}
+			return &ForbiddenError{
+				message:     payload.Message,
+				fieldErrors: fieldErrors,
+			}
+		}
 		return wrapSentinelError(ErrForbidden, payload.Message)
 	case http.StatusNotFound:
 		return wrapSentinelError(ErrNotFound, payload.Message)
