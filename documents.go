@@ -48,6 +48,7 @@ type DocumentOptions[C Content] struct {
 	DocumentTime    *time.Time
 	Fields          map[string]string
 	WithoutKeywords *bool
+	Overwrite       *bool
 }
 
 // AddDocumentResult contains metadata of the ingested document.
@@ -90,6 +91,7 @@ type addDocumentRequestBody struct {
 	DocumentTime    *time.Time        `json:"document_time,omitzero"`
 	Fields          map[string]string `json:"fields,omitempty"`
 	WithoutKeywords *bool             `json:"without_keywords,omitempty"`
+	Overwrite       *bool             `json:"overwrite,omitempty"`
 }
 
 type addDocumentResponseBody struct {
@@ -153,6 +155,7 @@ func (s *DocumentsService) Add[C Content](ctx context.Context, o DocumentOptions
 		DocumentTime:    o.DocumentTime,
 		Fields:          o.Fields,
 		WithoutKeywords: o.WithoutKeywords,
+		Overwrite:       o.Overwrite,
 	}
 
 	switch c := any(o.Content).(type) {

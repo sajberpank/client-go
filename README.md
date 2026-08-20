@@ -22,6 +22,7 @@ Sajberpank delivers hybrid semantic and keyword search with **Zero-Knowledge Bli
     - [A. Plain Text (`sajberpank.Text`)](#a-plain-text-sajberpanktext)
     - [B. Paginated Document (`sajberpank.Pages`)](#b-paginated-document-sajberpankpages)
     - [C. Structured Sentences (`sajberpank.Sentences`)](#c-structured-sentences-sajberpanksentences)
+    - [D. Overwriting Existing Documents (`Overwrite`)](#d-overwriting-existing-documents-overwrite)
   - [3. Document Status & Lifecycle](#3-document-status--lifecycle)
   - [4. Executing Search & Client-Edge Decryption](#4-executing-search--client-edge-decryption)
     - [Keyword Highlighting with resenje.org/keywords](#keyword-highlighting-with-resenjeorgkeywords)
@@ -219,6 +220,24 @@ result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sa
 		},
 	},
 })
+```
+
+#### D. Overwriting Existing Documents (`Overwrite`)
+
+To replace or update an existing document without deleting it first, pass `Overwrite` set to a pointer to `true`:
+
+```go
+result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Text]{
+	Namespace: "legal-corp",
+	Category:  "contracts",
+	ID:        "CTR-2026-001",
+	KeyName:   "primary-x25519-key",
+	Content:   sajberpank.Text("Updated Commercial General Liability coverage covering bodily injury and property damage worldwide."),
+	Overwrite: new(true),
+})
+if err != nil {
+	log.Fatalf("overwrite document: %v", err)
+}
 ```
 
 ---
