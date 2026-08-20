@@ -32,12 +32,12 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-${{ matrix.go-version }}-
 
-    # - name: Lint
-    #   if: matrix.os == 'ubuntu-latest'
-    #   uses: golangci/golangci-lint-action@v8
-    #   with:
-    #     version: v2.12.2
-    #     args: -v -c .golangci.yaml
+    - name: Lint
+      if: matrix.os == 'ubuntu-latest'
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: v2.13.0
+        args: -v -c .golangci.yaml
 
     - name: Build
       env:
