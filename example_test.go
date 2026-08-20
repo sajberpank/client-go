@@ -453,8 +453,7 @@ func Example_errorHandling() {
 		Content:   sajberpank.Text("Example contract text"),
 	})
 	if err != nil {
-		var badReq *sajberpank.BadRequestError
-		if errors.As(err, &badReq) {
+		if badReq, ok := errors.AsType[*sajberpank.BadRequestError](err); ok {
 			fmt.Printf("Validation error: %s\n", badReq.Message())
 			for _, fe := range badReq.FieldErrors() {
 				fmt.Printf("  - Field %q (%s): %s\n", fe.Field, fe.Reason, fe.Message)
