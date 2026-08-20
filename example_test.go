@@ -130,6 +130,16 @@ func ExampleDocumentsService_Add() {
 			{Text: "Indemnification clause applies.", PageNumber: 14, Reference: "Paragraph 3.2.1"},
 		},
 	})
+
+	// D. Overwriting an Existing Document
+	_, _ = apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Text]{
+		Namespace: "legal-corp",
+		Category:  "contracts",
+		ID:        "CTR-2026-001",
+		KeyName:   "primary-x25519-key",
+		Content:   sajberpank.Text("Updated Commercial General Liability coverage terms."),
+		Overwrite: new(true),
+	})
 	// Output:
 	// Document added: CTR-2026-001 (namespace: legal-corp:contracts)
 }

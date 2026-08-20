@@ -365,6 +365,70 @@ func TestDocumentsService(t *testing.T) {
 		}
 	})
 
+	t.Run("Add with Overwrite option", func(t *testing.T) {
+		tests := []struct {
+			name            string
+			overwrite       *bool
+			expectedInJSON  bool
+			expectedJSONVal bool
+		}{
+			{
+				name:            "overwrite true",
+				overwrite:       func() *bool { b := true; return &b }(),
+				expectedInJSON:  true,
+				expectedJSONVal: true,
+			},
+			{
+				name:            "overwrite false",
+				overwrite:       func() *bool { b := false; return &b }(),
+				expectedInJSON:  true,
+				expectedJSONVal: false,
+			},
+			{
+				name:           "overwrite nil (omitted)",
+				overwrite:      nil,
+				expectedInJSON: false,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				var receivedBody map[string]any
+				c, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+					_ = json.NewDecoder(r.Body).Decode(&receivedBody)
+					w.WriteHeader(http.StatusCreated)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"id":        receivedBody["id"],
+						"namespace": receivedBody["namespace"].(string) + ":" + receivedBody["category"].(string),
+						"added":     true,
+					})
+				})
+
+				resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Text]{
+					Namespace: "insureme",
+					Category:  "policy",
+					ID:        "POL-OW",
+					KeyName:   "primary-key",
+					Content:   client.Text("Overwritten text"),
+					Overwrite: tt.overwrite,
+				})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if resp.ID != "POL-OW" {
+					t.Errorf("unexpected response: %+v", resp)
+				}
+				val, exists := receivedBody["overwrite"]
+				if exists != tt.expectedInJSON {
+					t.Fatalf("expected overwrite present=%v in request body, got present=%v (body=%+v)", tt.expectedInJSON, exists, receivedBody)
+				}
+				if tt.expectedInJSON && val != tt.expectedJSONVal {
+					t.Errorf("expected overwrite=%v, got %v", tt.expectedJSONVal, val)
+				}
+			})
+		}
+	})
+
 	t.Run("Add with empty Content fails client validation", func(t *testing.T) {
 		c := client.New(testAPIKey, nil)
 		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Text]{
