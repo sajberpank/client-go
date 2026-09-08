@@ -509,6 +509,20 @@ func TestDocumentsService(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+
+	t.Run("DeleteAll", func(t *testing.T) {
+		c, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete && r.URL.Path == "/v1/search/documents" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			http.Error(w, "not found", http.StatusNotFound)
+		})
+
+		if err := c.Search.Documents.DeleteAll(ctx); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestSearchService(t *testing.T) {
