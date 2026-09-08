@@ -235,3 +235,8 @@ func (s *DocumentsService) Delete(ctx context.Context, namespace, category, id s
 	path := fmt.Sprintf("/v1/search/documents/%s/%s/%s", url.PathEscape(namespace), url.PathEscape(category), url.PathEscape(id))
 	return s.client.request(ctx, http.MethodDelete, path, nil, nil)
 }
+
+// DeleteAll removes all documents for the account.
+func (s *DocumentsService) DeleteAll(ctx context.Context) error {
+	return s.client.request(ctx, http.MethodDelete, "/v1/search/documents", nil, nil)
+}
