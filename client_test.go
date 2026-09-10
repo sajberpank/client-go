@@ -578,6 +578,13 @@ func TestSearchService(t *testing.T) {
 							"enc":        encapB64,
 							"ciphertext": cipherB64,
 						},
+						"encrypted_keywords": []map[string]any{
+							{
+								"key_id":     "test-key",
+								"enc":        encapB64,
+								"ciphertext": cipherB64,
+							},
+						},
 					},
 				},
 			})
@@ -633,6 +640,15 @@ func TestSearchService(t *testing.T) {
 		}
 		if text != "Decrypted policy content matching query." {
 			t.Errorf("got decrypted text %q", text)
+		}
+
+		// Test DecryptKeywords helper on result
+		kws, err := resp.Results[0].DecryptKeywords(priv)
+		if err != nil {
+			t.Fatalf("DecryptKeywords failed: %v", err)
+		}
+		if len(kws) != 1 || kws[0] != "Decrypted policy content matching query." {
+			t.Errorf("got decrypted keywords %v", kws)
 		}
 
 		// Test Keyring
@@ -1190,8 +1206,8 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 		}
 	})
 
-	t.Run("SearchResponse.DecryptKeywords success and nil", func(t *testing.T) {
-		resNil := &client.SearchResponse{}
+	t.Run("SearchResult.DecryptKeywords success and nil", func(t *testing.T) {
+		resNil := &client.SearchResult{ID: "DOC-K1"}
 		kws, err := resNil.DecryptKeywords(priv)
 		if err != nil {
 			t.Fatalf("unexpected error on nil EncryptedKeywords: %v", err)
@@ -1200,7 +1216,8 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 			t.Errorf("expected 0 keywords, got %d", len(kws))
 		}
 
-		resWithKeywords := &client.SearchResponse{
+		resWithKeywords := &client.SearchResult{
+			ID:                "DOC-K2",
 			EncryptedKeywords: []client.EncryptedPayload{*payload},
 		}
 		kws, err = resWithKeywords.DecryptKeywords(priv)
@@ -1211,7 +1228,8 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 			t.Errorf("unexpected keywords: %v", kws)
 		}
 
-		resCorrupt := &client.SearchResponse{
+		resCorrupt := &client.SearchResult{
+			ID: "DOC-K3",
 			EncryptedKeywords: []client.EncryptedPayload{
 				{Enc: "invalid base64", Ciphertext: "invalid base64"},
 			},

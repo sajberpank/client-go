@@ -69,22 +69,22 @@ type EncryptedPayload struct {
 
 // SearchResult represents an encrypted matching document returned by search.
 type SearchResult struct {
-	ID              string
-	Namespace       string
-	Category        string
-	Score           float32
-	Pages           []int32
-	References      []string
-	AddTime         time.Time
-	DocumentTime    *time.Time
-	EncryptedText   *EncryptedPayload
-	EncryptedFields map[string]EncryptedPayload
+	ID                string
+	Namespace         string
+	Category          string
+	Score             float32
+	Pages             []int32
+	References        []string
+	AddTime           time.Time
+	DocumentTime      *time.Time
+	EncryptedText     *EncryptedPayload
+	EncryptedFields   map[string]EncryptedPayload
+	EncryptedKeywords []EncryptedPayload
 }
 
-// SearchResponse contains matched document results and query-level encrypted keywords.
+// SearchResponse contains matched document results.
 type SearchResponse struct {
-	Results           []SearchResult
-	EncryptedKeywords []EncryptedPayload
+	Results []SearchResult
 }
 
 type temporalOptionsBody struct {
@@ -119,21 +119,21 @@ type encryptedPayloadBody struct {
 }
 
 type searchResultBody struct {
-	ID              string                          `json:"id"`
-	Namespace       string                          `json:"namespace"`
-	Category        string                          `json:"category"`
-	Score           float32                         `json:"score"`
-	Pages           []int32                         `json:"pages,omitempty"`
-	References      []string                        `json:"references,omitempty"`
-	AddTime         time.Time                       `json:"add_time"`
-	DocumentTime    *time.Time                      `json:"document_time,omitempty"`
-	EncryptedText   *encryptedPayloadBody           `json:"encrypted_text,omitempty"`
-	EncryptedFields map[string]encryptedPayloadBody `json:"encrypted_fields,omitempty"`
+	ID                string                          `json:"id"`
+	Namespace         string                          `json:"namespace"`
+	Category          string                          `json:"category"`
+	Score             float32                         `json:"score"`
+	Pages             []int32                         `json:"pages,omitempty"`
+	References        []string                        `json:"references,omitempty"`
+	AddTime           time.Time                       `json:"add_time"`
+	DocumentTime      *time.Time                      `json:"document_time,omitempty"`
+	EncryptedText     *encryptedPayloadBody           `json:"encrypted_text,omitempty"`
+	EncryptedFields   map[string]encryptedPayloadBody `json:"encrypted_fields,omitempty"`
+	EncryptedKeywords []encryptedPayloadBody          `json:"encrypted_keywords,omitempty"`
 }
 
 type searchResponseBody struct {
-	Results           []searchResultBody     `json:"results"`
-	EncryptedKeywords []encryptedPayloadBody `json:"encrypted_keywords,omitempty"`
+	Results []searchResultBody `json:"results"`
 }
 
 func toTemporalOptionsBody(t *TemporalOptions) *temporalOptionsBody {
@@ -188,17 +188,26 @@ func toEncryptedPayloadMap(bodies map[string]encryptedPayloadBody) map[string]En
 }
 
 func toSearchResult(body searchResultBody) SearchResult {
+	var keywords []EncryptedPayload
+	if body.EncryptedKeywords != nil {
+		keywords = make([]EncryptedPayload, len(body.EncryptedKeywords))
+		for i, kw := range body.EncryptedKeywords {
+			keywords[i] = EncryptedPayload(kw)
+		}
+	}
+
 	return SearchResult{
-		ID:              body.ID,
-		Namespace:       body.Namespace,
-		Category:        body.Category,
-		Score:           body.Score,
-		Pages:           body.Pages,
-		References:      body.References,
-		AddTime:         body.AddTime,
-		DocumentTime:    body.DocumentTime,
-		EncryptedText:   toEncryptedPayload(body.EncryptedText),
-		EncryptedFields: toEncryptedPayloadMap(body.EncryptedFields),
+		ID:                body.ID,
+		Namespace:         body.Namespace,
+		Category:          body.Category,
+		Score:             body.Score,
+		Pages:             body.Pages,
+		References:        body.References,
+		AddTime:           body.AddTime,
+		DocumentTime:      body.DocumentTime,
+		EncryptedText:     toEncryptedPayload(body.EncryptedText),
+		EncryptedFields:   toEncryptedPayloadMap(body.EncryptedFields),
+		EncryptedKeywords: keywords,
 	}
 }
 
@@ -208,17 +217,8 @@ func toSearchResponse(body searchResponseBody) *SearchResponse {
 		results[i] = toSearchResult(r)
 	}
 
-	var keywords []EncryptedPayload
-	if body.EncryptedKeywords != nil {
-		keywords = make([]EncryptedPayload, len(body.EncryptedKeywords))
-		for i, kw := range body.EncryptedKeywords {
-			keywords[i] = EncryptedPayload(kw)
-		}
-	}
-
 	return &SearchResponse{
-		Results:           results,
-		EncryptedKeywords: keywords,
+		Results: results,
 	}
 }
 
@@ -235,7 +235,7 @@ func (r *SearchResult) DecryptText(priv hpke.PrivateKey) (string, error) {
 }
 
 // DecryptKeywords decrypts all EncryptedKeywords payloads using the provided recipient private key and default cipher suite.
-func (r *SearchResponse) DecryptKeywords(priv hpke.PrivateKey) ([]string, error) {
+func (r *SearchResult) DecryptKeywords(priv hpke.PrivateKey) ([]string, error) {
 	if len(r.EncryptedKeywords) == 0 {
 		return nil, nil
 	}

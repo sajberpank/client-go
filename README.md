@@ -283,13 +283,6 @@ if err != nil {
 	log.Fatalf("search query failed: %v", err)
 }
 
-// Decrypt query-level matched keywords
-keywords, err := resp.DecryptKeywords(privKey)
-if err != nil {
-	log.Printf("failed to decrypt query keywords: %v", err)
-}
-fmt.Printf("Matched query keywords: %v\n", keywords)
-
 // Option A: Direct string decryption with standard default cipher suite
 for i, res := range resp.Results {
 	decryptedText, err := res.DecryptText(privKey)
@@ -300,6 +293,13 @@ for i, res := range resp.Results {
 
 	fmt.Printf("[%d] ID: %s (Score: %.4f, Pages: %v, References: %v)\n", i+1, res.ID, res.Score, res.Pages, res.References)
 	fmt.Printf("    Content: %s\n", decryptedText)
+
+	// Decrypt result-level matched keywords
+	keywords, err := res.DecryptKeywords(privKey)
+	if err != nil {
+		log.Printf("failed to decrypt keywords: %v", err)
+	}
+	fmt.Printf("    Matched keywords: %v\n", keywords)
 
 	// Decrypt custom encrypted fields
 	fields, err := res.DecryptFields(privKey)
@@ -328,9 +328,9 @@ for _, res := range resp.Results {
 
 #### Keyword Highlighting with `resenje.org/keywords`
 
-In Zero-Knowledge Blind Storage, the server never stores or views document plaintext or raw keywords, so search highlighting cannot happen on the server. Instead, search matches return query-level sealed encrypted keywords in `resp.EncryptedKeywords`.
+In Zero-Knowledge Blind Storage, the server never stores or views document plaintext or raw keywords, so search highlighting cannot happen on the server. Instead, search matches return per-result sealed encrypted keywords in `res.EncryptedKeywords`.
 
-Once you decrypt the query keywords and document text at the client edge, you can use [`resenje.org/keywords`](https://pkg.go.dev/resenje.org/keywords)—a high-performance, Unicode-aware Aho-Corasick text matcher—to highlight search terms across all matching documents:
+Once you decrypt keywords and document text at the client edge, you can use [`resenje.org/keywords`](https://pkg.go.dev/resenje.org/keywords)—a high-performance, Unicode-aware Aho-Corasick text matcher—to highlight search terms in each matching document:
 
 ```bash
 go get resenje.org/keywords
@@ -362,16 +362,7 @@ func main() {
 		log.Fatalf("search query failed: %v", err)
 	}
 
-	// 2. Decrypt query-level matched keywords once using your private key
-	decryptedKeywords, err := resp.DecryptKeywords(privKey)
-	if err != nil {
-		log.Printf("failed to decrypt keywords: %v", err)
-	}
-
-	// 3. Build an Aho-Corasick matcher once from the decrypted keywords
-	matcher := keywords.NewMatcher(decryptedKeywords)
-
-	// 4. Decrypt and highlight keywords for each matching document
+	// 2. Decrypt and highlight keywords for each matching document
 	for _, res := range resp.Results {
 		decryptedText, err := res.DecryptText(privKey)
 		if err != nil {
@@ -379,6 +370,13 @@ func main() {
 			continue
 		}
 
+		decryptedKeywords, err := res.DecryptKeywords(privKey)
+		if err != nil {
+			log.Printf("failed to decrypt keywords for %s: %v", res.ID, err)
+			continue
+		}
+
+		matcher := keywords.NewMatcher(decryptedKeywords)
 		highlighted := keywords.Highlight(decryptedText, matcher, "mark", map[string]string{
 			"class": "bg-yellow-200 font-semibold",
 		})
