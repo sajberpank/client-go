@@ -316,12 +316,12 @@ func ExampleSearchService_Query_decryptFields() {
 						"enc": %q,
 						"ciphertext": %q
 					}
-				}
-			}],
-			"encrypted_keywords": [{
-				"key_id": "primary-x25519-key",
-				"enc": %q,
-				"ciphertext": %q
+				},
+				"encrypted_keywords": [{
+					"key_id": "primary-x25519-key",
+					"enc": %q,
+					"ciphertext": %q
+				}]
 			}]
 		}`,
 			base64.StdEncoding.EncodeToString(encField),
@@ -348,7 +348,7 @@ func ExampleSearchService_Query_decryptFields() {
 		log.Fatalf("query failed: %v", err)
 	}
 
-	kwList, err := resp.DecryptKeywords(privKey)
+	kwList, err := resp.Results[0].DecryptKeywords(privKey)
 	if err != nil {
 		log.Fatalf("decrypt keywords: %v", err)
 	}
