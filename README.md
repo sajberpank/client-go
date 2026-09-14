@@ -22,7 +22,8 @@ Sajberpank delivers hybrid semantic and keyword search with **Zero-Knowledge Bli
     - [A. Plain Text (`sajberpank.Text`)](#a-plain-text-sajberpanktext)
     - [B. Paginated Document (`sajberpank.Pages`)](#b-paginated-document-sajberpankpages)
     - [C. Structured Sentences (`sajberpank.Sentences`)](#c-structured-sentences-sajberpanksentences)
-    - [D. Overwriting Existing Documents (`Overwrite`)](#d-overwriting-existing-documents-overwrite)
+    - [D. Structured Sections (`sajberpank.Sections`)](#d-structured-sections-sajberpanksections)
+    - [E. Overwriting Existing Documents (`Overwrite`)](#e-overwriting-existing-documents-overwrite)
   - [3. Document Status & Lifecycle](#3-document-status--lifecycle)
   - [4. Executing Search & Client-Edge Decryption](#4-executing-search--client-edge-decryption)
     - [Keyword Highlighting with resenje.org/keywords](#keyword-highlighting-with-resenjeorgkeywords)
@@ -39,7 +40,7 @@ Sajberpank delivers hybrid semantic and keyword search with **Zero-Knowledge Bli
 ## Features
 
 - **Zero-Knowledge Security**: End-to-end asymmetric encryption using Go 1.26 standard library `crypto/hpke` (`DHKEM_X25519`, `DHKEM_P256`, and post-quantum `MLKEM768_X25519`).
-- **Type-Safe Ingestion Variants**: Go 1.27 constrained type union and generic options for document content (`sajberpank.Text`, `sajberpank.Pages`, and `sajberpank.Sentences`).
+- **Type-Safe Ingestion Variants**: Go 1.27 constrained type union and generic options for document content (`sajberpank.Text`, `sajberpank.Pages`, `sajberpank.Sentences`, and `sajberpank.Sections`).
 - **Hybrid Retrieval**: Combines dense semantic vector similarity with sparse BM25 keyword search and temporal score decay.
 - **Similarity & Negative Recommendations**: Recommend similar documents with positive/negative examples and configurable fusion strategies (`average_vector`, `best_score`, `sum_scores`).
 - **Zero External Dependencies**: Implemented strictly using the Go standard library for maximum security, performance, and minimal footprint.
@@ -153,7 +154,7 @@ fmt.Printf("Registered public key %q (KEM: %s, AEAD: %s)\n", key.Name, key.KEM, 
 
 ### 2. Ingesting Documents (Type-Safe Content)
 
-The client enforces compile-time type constraints via generic `sajberpank.DocumentOptions[C sajberpank.Content]` and the `sajberpank.Content` type union (`Text | Pages | Sentences`):
+The client enforces compile-time type constraints via generic `sajberpank.DocumentOptions[C sajberpank.Content]` and the `sajberpank.Content` type union (`Text | Pages | Sentences | Sections`):
 
 #### A. Plain Text (`sajberpank.Text`)
 
@@ -222,7 +223,30 @@ result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sa
 })
 ```
 
-#### D. Overwriting Existing Documents (`Overwrite`)
+#### D. Structured Sections (`sajberpank.Sections`)
+
+Preserves author-defined logical boundaries (clauses, articles, distinct sections). Each section is chunked independently to prevent boundary bleeding, and sections shorter than maximum chunk size are preserved intact:
+
+```go
+result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sajberpank.Sections]{
+	Namespace: "legal-corp",
+	Category:  "contracts",
+	ID:        "CTR-2026-902",
+	KeyName:   "primary-x25519-key",
+	Content: sajberpank.Sections{
+		{
+			Text:      "Term and Termination: This agreement shall take effect on January 1, 2026.",
+			Reference: "Section 1",
+		},
+		{
+			Text:      "Payment: Invoices shall be payable net 30 days upon delivery.",
+			Reference: "Section 2",
+		},
+	},
+})
+```
+
+#### E. Overwriting Existing Documents (`Overwrite`)
 
 To replace or update an existing document without deleting it first, pass `Overwrite` set to a pointer to `true`:
 

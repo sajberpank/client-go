@@ -28,14 +28,21 @@ type Sentence struct {
 	Reference  string
 }
 
+// Section represents a coherent logical unit of a document with optional citation reference.
+type Section struct {
+	Text      string
+	Reference string
+}
+
 // Concrete content types:
 type Text string
 type Pages []Page
 type Sentences []Sentence
+type Sections []Section
 
-// Content is a type constraint allowing only Text, Pages, or Sentences.
+// Content is a type constraint allowing only Text, Pages, Sentences, or Sections.
 type Content interface {
-	Text | Pages | Sentences
+	Text | Pages | Sentences | Sections
 }
 
 // DocumentOptions contains parameters for ingesting a document parameterized by content type.
@@ -80,6 +87,11 @@ type sentenceBody struct {
 	Reference  string `json:"reference,omitempty"`
 }
 
+type sectionBody struct {
+	Text      string `json:"text"`
+	Reference string `json:"reference,omitempty"`
+}
+
 type addDocumentRequestBody struct {
 	Namespace       string            `json:"namespace"`
 	Category        string            `json:"category"`
@@ -88,6 +100,7 @@ type addDocumentRequestBody struct {
 	Text            string            `json:"text,omitempty"`
 	Pages           []pageBody        `json:"pages,omitempty"`
 	Sentences       []sentenceBody    `json:"sentences,omitempty"`
+	Sections        []sectionBody     `json:"sections,omitempty"`
 	DocumentTime    *time.Time        `json:"document_time,omitzero"`
 	Fields          map[string]string `json:"fields,omitempty"`
 	WithoutKeywords *bool             `json:"without_keywords,omitempty"`
@@ -128,6 +141,17 @@ func toSentenceBodies(sentences []Sentence) []sentenceBody {
 	bodies := make([]sentenceBody, len(sentences))
 	for i, s := range sentences {
 		bodies[i] = sentenceBody(s)
+	}
+	return bodies
+}
+
+func toSectionBodies(sections []Section) []sectionBody {
+	if sections == nil {
+		return nil
+	}
+	bodies := make([]sectionBody, len(sections))
+	for i, s := range sections {
+		bodies[i] = sectionBody(s)
 	}
 	return bodies
 }
@@ -174,6 +198,11 @@ func (s *DocumentsService) Add[C Content](ctx context.Context, o DocumentOptions
 			return nil, ErrMissingDocumentContent
 		}
 		body.Sentences = toSentenceBodies(c)
+	case Sections:
+		if len(c) == 0 {
+			return nil, ErrMissingDocumentContent
+		}
+		body.Sections = toSectionBodies(c)
 	default:
 		return nil, ErrInvalidDocumentContent
 	}

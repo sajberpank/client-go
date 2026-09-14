@@ -365,6 +365,45 @@ func TestDocumentsService(t *testing.T) {
 		}
 	})
 
+	t.Run("Add Sections", func(t *testing.T) {
+		c, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			sections, ok := body["sections"].([]any)
+			if !ok || len(sections) != 2 {
+				t.Errorf("expected 2 sections, got %v", body["sections"])
+			}
+			sec0 := sections[0].(map[string]any)
+			if sec0["text"] != "Section 1" || sec0["reference"] != "sec-1" {
+				t.Errorf("unexpected section 0: %v", sec0)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":        "CTR-200",
+				"namespace": "insureme",
+				"added":     true,
+			})
+		})
+
+		resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Sections]{
+			Namespace: "insureme",
+			Category:  "contract",
+			ID:        "CTR-200",
+			KeyName:   "primary-key",
+			Content: client.Sections{
+				{Text: "Section 1", Reference: "sec-1"},
+				{Text: "Section 2", Reference: "sec-2"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.ID != "CTR-200" {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+	})
+
 	t.Run("Add with Overwrite option", func(t *testing.T) {
 		tests := []struct {
 			name            string
@@ -457,6 +496,15 @@ func TestDocumentsService(t *testing.T) {
 			Content:   client.Sentences{},
 		}); !errors.Is(err, client.ErrMissingDocumentContent) {
 			t.Errorf("expected ErrMissingDocumentContent for empty Sentences, got %v", err)
+		}
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Sections]{
+			Namespace: "insureme",
+			Category:  "policy",
+			ID:        "POL-1",
+			KeyName:   "key",
+			Content:   client.Sections{},
+		}); !errors.Is(err, client.ErrMissingDocumentContent) {
+			t.Errorf("expected ErrMissingDocumentContent for empty Sections, got %v", err)
 		}
 	})
 
