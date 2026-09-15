@@ -517,7 +517,6 @@ func TestDocumentsService(t *testing.T) {
 					"chunk_count":   2,
 					"total_tokens":  300,
 					"pages":         []int{1, 2},
-					"references":    []string{"sec-1", "para-2"},
 					"add_time":      "2026-08-18T12:00:00Z",
 					"document_time": "2026-08-16T12:00:00Z",
 				})
@@ -536,8 +535,8 @@ func TestDocumentsService(t *testing.T) {
 		if status.ChunkCount != 2 {
 			t.Errorf("unexpected chunk count: %d", status.ChunkCount)
 		}
-		if len(status.Pages) != 2 || len(status.References) != 2 {
-			t.Errorf("unexpected pages/references: %v / %v", status.Pages, status.References)
+		if len(status.Pages) != 2 {
+			t.Errorf("unexpected pages: %v", status.Pages)
 		}
 		if status.DocumentTime == nil || !status.DocumentTime.Equal(time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)) {
 			t.Errorf("unexpected document_time: %v", status.DocumentTime)
@@ -613,12 +612,18 @@ func TestSearchService(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"results": []map[string]any{
 					{
-						"id":            "POL-999",
-						"namespace":     "insureme",
-						"category":      "policy",
-						"score":         0.88,
-						"pages":         []int32{1, 2},
-						"references":    []string{"sec-1.1", "sec-1.2"},
+						"id":        "POL-999",
+						"namespace": "insureme",
+						"category":  "policy",
+						"score":     0.88,
+						"pages":     []int32{1, 2},
+						"encrypted_references": []map[string]any{
+							{
+								"key_id":     "test-key",
+								"enc":        encapB64,
+								"ciphertext": cipherB64,
+							},
+						},
 						"add_time":      expectedTime.Format(time.RFC3339),
 						"document_time": expectedTime.Format(time.RFC3339),
 						"encrypted_text": map[string]any{
@@ -654,8 +659,8 @@ func TestSearchService(t *testing.T) {
 		if len(res.Pages) != 2 || res.Pages[0] != 1 || res.Pages[1] != 2 {
 			t.Errorf("unexpected Pages: %v", res.Pages)
 		}
-		if len(res.References) != 2 || res.References[0] != "sec-1.1" || res.References[1] != "sec-1.2" {
-			t.Errorf("unexpected References: %v", res.References)
+		if len(res.EncryptedReferences) != 1 {
+			t.Errorf("unexpected EncryptedReferences: %v", res.EncryptedReferences)
 		}
 		if !res.AddTime.Equal(time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)) {
 			t.Errorf("unexpected AddTime: %v", res.AddTime)
@@ -697,6 +702,15 @@ func TestSearchService(t *testing.T) {
 		}
 		if len(kws) != 1 || kws[0] != "Decrypted policy content matching query." {
 			t.Errorf("got decrypted keywords %v", kws)
+		}
+
+		// Test DecryptReferences helper on result
+		refs, err := resp.Results[0].DecryptReferences(priv)
+		if err != nil {
+			t.Fatalf("DecryptReferences failed: %v", err)
+		}
+		if len(refs) != 1 || refs[0] != "Decrypted policy content matching query." {
+			t.Errorf("got decrypted references %v", refs)
 		}
 
 		// Test Keyring
