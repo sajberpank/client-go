@@ -315,7 +315,7 @@ for i, res := range resp.Results {
 		continue
 	}
 
-	fmt.Printf("[%d] ID: %s (Score: %.4f, Pages: %v, References: %v)\n", i+1, res.ID, res.Score, res.Pages, res.References)
+	fmt.Printf("[%d] ID: %s (Score: %.4f, Pages: %v)\n", i+1, res.ID, res.Score, res.Pages)
 	fmt.Printf("    Content: %s\n", decryptedText)
 
 	// Decrypt result-level matched keywords
@@ -324,6 +324,13 @@ for i, res := range resp.Results {
 		log.Printf("failed to decrypt keywords: %v", err)
 	}
 	fmt.Printf("    Matched keywords: %v\n", keywords)
+
+	// Decrypt document references
+	references, err := res.DecryptReferences(privKey)
+	if err != nil {
+		log.Printf("failed to decrypt references: %v", err)
+	}
+	fmt.Printf("    Matched references: %v\n", references)
 
 	// Decrypt custom encrypted fields
 	fields, err := res.DecryptFields(privKey)

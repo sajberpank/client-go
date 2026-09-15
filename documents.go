@@ -71,7 +71,6 @@ type DocumentStatus struct {
 	IsComplete   bool
 	ChunkCount   int
 	Pages        []int32
-	References   []string
 	AddTime      time.Time
 	DocumentTime *time.Time
 }
@@ -118,7 +117,6 @@ type documentStatusBody struct {
 	IsComplete   bool       `json:"is_complete"`
 	ChunkCount   int        `json:"chunk_count"`
 	Pages        []int32    `json:"pages,omitempty"`
-	References   []string   `json:"references,omitempty"`
 	AddTime      time.Time  `json:"add_time,omitzero"`
 	DocumentTime *time.Time `json:"document_time,omitempty"`
 }
@@ -240,7 +238,6 @@ func (s *DocumentsService) GetStatus(ctx context.Context, namespace, category, i
 		IsComplete:   statusBody.IsComplete,
 		ChunkCount:   statusBody.ChunkCount,
 		Pages:        statusBody.Pages,
-		References:   statusBody.References,
 		AddTime:      statusBody.AddTime,
 		DocumentTime: statusBody.DocumentTime,
 	}, nil
