@@ -287,8 +287,8 @@ func TestDocumentsService(t *testing.T) {
 			KeyName:      "primary-key",
 			Content:      client.Text("Policy coverage text goes here."),
 			DocumentTime: &ts,
-			Fields: map[string]string{
-				"category": "health",
+			Fields: map[string]client.FieldValue{
+				"category": {Value: "health", Weight: 0.5},
 			},
 		})
 		if err != nil {
@@ -299,6 +299,14 @@ func TestDocumentsService(t *testing.T) {
 		}
 		if receivedBody["text"] != "Policy coverage text goes here." {
 			t.Errorf("got text %v", receivedBody["text"])
+		}
+		rawFields, ok := receivedBody["fields"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected fields in received body, got %v", receivedBody["fields"])
+		}
+		catField, ok := rawFields["category"].(map[string]any)
+		if !ok || catField["value"] != "health" || catField["weight"] != float64(0.5) {
+			t.Errorf("unexpected category field in body: %v", rawFields["category"])
 		}
 	})
 
@@ -729,6 +737,29 @@ func TestSearchService(t *testing.T) {
 		emptyRing := client.Keyring{}
 		if _, err := emptyRing.Open(resp.Results[0].EncryptedText); err == nil {
 			t.Errorf("expected error for missing key in keyring, got nil")
+		}
+	})
+
+	t.Run("Search with OneResultPerDocument", func(t *testing.T) {
+		var receivedReq map[string]any
+		c, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{},
+			})
+		})
+
+		_, err := c.Search.Query(ctx, client.SearchOptions{
+			Namespace:            "insureme",
+			Categories:           []string{"policy"},
+			Query:                "policy coverage",
+			OneResultPerDocument: true,
+		})
+		if err != nil {
+			t.Fatalf("search query failed: %v", err)
+		}
+		if dedupe, ok := receivedReq["one_result_per_document"].(bool); !ok || !dedupe {
+			t.Errorf("expected one_result_per_document to be true, got %v", receivedReq["one_result_per_document"])
 		}
 	})
 

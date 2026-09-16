@@ -168,9 +168,9 @@ result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sa
 	KeyName:      "primary-x25519-key",
 	Content:      sajberpank.Text("Commercial General Liability coverage covering bodily injury and property damage worldwide."),
 	DocumentTime: &docTimestamp,
-	Fields: map[string]string{
-		"region":        "EMEA",
-		"policy_number": "POL-98741",
+	Fields: map[string]sajberpank.Field{
+		"region":        {Value: "EMEA"},
+		"policy_number": {Value: "POL-98741", Weight: 0.75},
 	},
 })
 if err != nil {

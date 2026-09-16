@@ -98,9 +98,9 @@ func ExampleDocumentsService_Add() {
 		KeyName:      "primary-x25519-key",
 		Content:      sajberpank.Text("Commercial General Liability coverage covering bodily injury and property damage worldwide."),
 		DocumentTime: &docTimestamp,
-		Fields: map[string]string{
-			"region":        "EMEA",
-			"policy_number": "POL-98741",
+		Fields: map[string]sajberpank.FieldValue{
+			"region":        {Value: "EMEA"},
+			"policy_number": {Value: "POL-98741", Weight: 1.0},
 		},
 	})
 	if err != nil {
