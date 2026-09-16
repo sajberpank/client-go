@@ -45,6 +45,16 @@ type Content interface {
 	Text | Pages | Sentences | Sections
 }
 
+// FieldValue represents a document metadata field value with an optional search weight.
+type FieldValue struct {
+	Value string `json:"value"`
+	// Weight controls the influence of the field on ranking in search queries.
+	// Default is 0.0, which means the field is only used for filtering (retrieval augmentation).
+	// The higher the weight, the more influence the field has on ranking.
+	// Valid values are between 0.0 and 1.0.
+	Weight float32 `json:"weight,omitempty"`
+}
+
 // DocumentOptions contains parameters for ingesting a document parameterized by content type.
 type DocumentOptions[C Content] struct {
 	Namespace       string
@@ -53,7 +63,7 @@ type DocumentOptions[C Content] struct {
 	KeyName         string
 	Content         C
 	DocumentTime    *time.Time
-	Fields          map[string]string
+	Fields          map[string]FieldValue
 	WithoutKeywords *bool
 	Overwrite       *bool
 }
@@ -92,18 +102,18 @@ type sectionBody struct {
 }
 
 type addDocumentRequestBody struct {
-	Namespace       string            `json:"namespace"`
-	Category        string            `json:"category"`
-	ID              string            `json:"id"`
-	KeyName         string            `json:"key_name"`
-	Text            string            `json:"text,omitempty"`
-	Pages           []pageBody        `json:"pages,omitempty"`
-	Sentences       []sentenceBody    `json:"sentences,omitempty"`
-	Sections        []sectionBody     `json:"sections,omitempty"`
-	DocumentTime    *time.Time        `json:"document_time,omitzero"`
-	Fields          map[string]string `json:"fields,omitempty"`
-	WithoutKeywords *bool             `json:"without_keywords,omitempty"`
-	Overwrite       *bool             `json:"overwrite,omitempty"`
+	Namespace       string                `json:"namespace"`
+	Category        string                `json:"category"`
+	ID              string                `json:"id"`
+	KeyName         string                `json:"key_name"`
+	Text            string                `json:"text,omitempty"`
+	Pages           []pageBody            `json:"pages,omitempty"`
+	Sentences       []sentenceBody        `json:"sentences,omitempty"`
+	Sections        []sectionBody         `json:"sections,omitempty"`
+	DocumentTime    *time.Time            `json:"document_time,omitzero"`
+	Fields          map[string]FieldValue `json:"fields,omitempty"`
+	WithoutKeywords *bool                 `json:"without_keywords,omitempty"`
+	Overwrite       *bool                 `json:"overwrite,omitempty"`
 }
 
 type addDocumentResponseBody struct {

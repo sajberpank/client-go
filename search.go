@@ -52,12 +52,13 @@ type SimilarityOptions struct {
 
 // SearchOptions holds parameters for executing a search query.
 type SearchOptions struct {
-	Namespace  string
-	Categories []string
-	Query      string
-	Similarity *SimilarityOptions
-	Limit      int
-	Temporal   *TemporalOptions
+	Namespace            string
+	Categories           []string
+	Query                string
+	Similarity           *SimilarityOptions
+	Limit                int
+	OneResultPerDocument bool
+	Temporal             *TemporalOptions
 }
 
 // EncryptedPayload represents base64-encoded encrypted payload and key metadata.
@@ -104,12 +105,13 @@ type similarityOptionsBody struct {
 }
 
 type searchQueryRequestBody struct {
-	Namespace  string                 `json:"namespace"`
-	Categories []string               `json:"categories,omitempty"`
-	Query      string                 `json:"query,omitempty"`
-	Similarity *similarityOptionsBody `json:"similarity,omitempty"`
-	Limit      int                    `json:"limit,omitempty"`
-	Temporal   *temporalOptionsBody   `json:"temporal,omitempty"`
+	Namespace            string                 `json:"namespace"`
+	Categories           []string               `json:"categories,omitempty"`
+	Query                string                 `json:"query,omitempty"`
+	Similarity           *similarityOptionsBody `json:"similarity,omitempty"`
+	Limit                int                    `json:"limit,omitempty"`
+	OneResultPerDocument bool                   `json:"one_result_per_document,omitempty"`
+	Temporal             *temporalOptionsBody   `json:"temporal,omitempty"`
 }
 
 type encryptedPayloadBody struct {
@@ -297,12 +299,13 @@ func (s *SearchService) Query(ctx context.Context, o SearchOptions) (*SearchResp
 	}
 
 	req := searchQueryRequestBody{
-		Namespace:  o.Namespace,
-		Categories: o.Categories,
-		Query:      o.Query,
-		Similarity: toSimilarityOptionsBody(o.Similarity),
-		Limit:      o.Limit,
-		Temporal:   toTemporalOptionsBody(o.Temporal),
+		Namespace:            o.Namespace,
+		Categories:           o.Categories,
+		Query:                o.Query,
+		Similarity:           toSimilarityOptionsBody(o.Similarity),
+		Limit:                o.Limit,
+		OneResultPerDocument: o.OneResultPerDocument,
+		Temporal:             toTemporalOptionsBody(o.Temporal),
 	}
 
 	var respBody searchResponseBody
