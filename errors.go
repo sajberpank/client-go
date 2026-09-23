@@ -259,7 +259,12 @@ const maxErrorBodyBytes = 1 << 20 // 1 MB max error payload decode limit
 
 func handleErrorResponse(resp *http.Response) error {
 	var payload apiErrorPayload
-	_ = json.NewDecoder(io.LimitReader(resp.Body, maxErrorBodyBytes)).Decode(&payload)
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+	if len(bodyBytes) > 0 {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			payload.Message = strings.TrimSpace(string(bodyBytes))
+		}
+	}
 
 	switch resp.StatusCode {
 	case http.StatusBadRequest:

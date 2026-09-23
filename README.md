@@ -30,21 +30,25 @@ Sajberpank delivers hybrid semantic and keyword search with **Zero-Knowledge Bli
   - [5. Temporal Decay Scoring](#5-temporal-decay-scoring)
   - [6. Vector Similarity Recommendations](#6-vector-similarity-recommendations)
   - [7. Multi-Key Decryption via Keyring](#7-multi-key-decryption-via-keyring)
-  - [8. Account API Key Management](#8-account-api-key-management)
+  - [8. Zero-Downtime Key Rotation](#8-zero-downtime-key-rotation)
+  - [9. Account API Key Management](#9-account-api-key-management)
 - [Error Handling & Diagnostics](#error-handling--diagnostics)
 - [Security & Architecture Constraints](#security--architecture-constraints)
+  - [1. Zero-Knowledge Blind Storage](#1-zero-knowledge-blind-storage)
+  - [2. Search & Similarity Constraints](#2-search--similarity-constraints)
+  - [3. Rate Limiting](#3-rate-limiting)
 - [License](#license)
 
 ---
 
 ## Features
 
-- **Zero-Knowledge Security**: End-to-end asymmetric encryption using Go 1.26 standard library `crypto/hpke` (`DHKEM_X25519`, `DHKEM_P256`, and post-quantum `MLKEM768_X25519`).
+- **Zero-Knowledge Security**: End-to-end envelope encryption combining AES-256-GCM data encryption with Go 1.26+ standard library `crypto/hpke` key encapsulation (`DHKEM_X25519`, `DHKEM_P256`, and post-quantum `MLKEM768_X25519`).
 - **Type-Safe Ingestion Variants**: Go 1.27 constrained type union and generic options for document content (`sajberpank.Text`, `sajberpank.Pages`, `sajberpank.Sentences`, and `sajberpank.Sections`).
 - **Hybrid Retrieval**: Combines dense semantic vector similarity with sparse BM25 keyword search and temporal score decay.
-- **Similarity & Negative Recommendations**: Recommend similar documents with positive/negative examples and configurable fusion strategies (`average_vector`, `best_score`, `sum_scores`).
+- **Similarity & Negative Recommendations**: Recommend similar documents with positive and negative reference examples.
 - **Zero External Dependencies**: Implemented strictly using the Go standard library for maximum security, performance, and minimal footprint.
-- **Developer-Friendly Ergonomics**: Direct decryption helpers (`res.DecryptText()`, `EncryptedPayload.OpenDefault()`, `sajberpank.Keyring`) and rich error diagnostics (`sajberpank.BadRequestError`).
+- **Developer-Friendly Ergonomics**: Direct decryption helpers (`res.DecryptText()`, `res.DecryptKeywords()`, `sajberpank.Keyring`, `client.Search.Keys.Rotate()`) and rich error diagnostics (`sajberpank.BadRequestError`).
 
 ---
 
@@ -54,7 +58,7 @@ Sajberpank delivers hybrid semantic and keyword search with **Zero-Knowledge Bli
 go get sajberpank.rs/sajberpank
 ```
 
-> **Requirements**: **Go 1.27 or later** (requires Go 1.27 method type parameters and standard library `crypto/hpke`).
+> **Requirements**: **Go 1.27 or later** (requires standard library `crypto/hpke`).
 
 ---
 
@@ -168,7 +172,7 @@ result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sa
 	KeyName:      "primary-x25519-key",
 	Content:      sajberpank.Text("Commercial General Liability coverage covering bodily injury and property damage worldwide."),
 	DocumentTime: &docTimestamp,
-	Fields: map[string]sajberpank.Field{
+	Fields: map[string]sajberpank.FieldValue{
 		"region":        {Value: "EMEA"},
 		"policy_number": {Value: "POL-98741", Weight: 0.75},
 	},
@@ -198,6 +202,10 @@ result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sa
 		},
 	},
 })
+if err != nil {
+	log.Fatalf("ingest pages: %v", err)
+}
+fmt.Printf("Document added: %s\n", result.ID)
 ```
 
 #### C. Structured Sentences (`sajberpank.Sentences`)
@@ -221,6 +229,10 @@ result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sa
 		},
 	},
 })
+if err != nil {
+	log.Fatalf("ingest sentences: %v", err)
+}
+fmt.Printf("Document added: %s\n", result.ID)
 ```
 
 #### D. Structured Sections (`sajberpank.Sections`)
@@ -244,6 +256,10 @@ result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sa
 		},
 	},
 })
+if err != nil {
+	log.Fatalf("ingest sections: %v", err)
+}
+fmt.Printf("Document added: %s\n", result.ID)
 ```
 
 #### E. Overwriting Existing Documents (`Overwrite`)
@@ -262,6 +278,7 @@ result, err := apiClient.Search.Documents.Add(ctx, sajberpank.DocumentOptions[sa
 if err != nil {
 	log.Fatalf("overwrite document: %v", err)
 }
+fmt.Printf("Document overwritten: %s\n", result.ID)
 ```
 
 ---
@@ -342,18 +359,20 @@ for i, res := range resp.Results {
 	}
 }
 
-// Option B: Decryption with custom HPKE cipher suite parameters
+// Option B: Decryption with custom HPKE cipher suite parameters (and optional info binding)
 kdf := hpke.HKDFSHA256()
-aead := hpke.ChaCha20Poly1305() // or hpke.AES128GCM(), hpke.AES256GCM()
+aead := hpke.AES256GCM() // or hpke.ChaCha20Poly1305(), hpke.AES128GCM()
 
 for _, res := range resp.Results {
-	if res.EncryptedText != nil {
-		decryptedBytes, err := res.EncryptedText.Open(privKey, kdf, aead, nil)
-		if err != nil {
-			log.Fatalf("custom decryption failed: %v", err)
-		}
-		fmt.Printf("Decrypted with custom parameters: %s\n", string(decryptedBytes))
+	decryptedText, err := res.DecryptText(privKey,
+		sajberpank.WithSuite(kdf, aead),
+		// sajberpank.WithInfo([]byte("custom-info")), // optional context binding
+	)
+	if err != nil {
+		log.Printf("failed to decrypt %s: %v", res.ID, err)
+		continue
 	}
+	fmt.Printf("Decrypted with custom parameters: %s\n", decryptedText)
 }
 ```
 
@@ -382,6 +401,12 @@ import (
 func main() {
 	ctx := context.Background()
 	apiClient := sajberpank.New("sp_live_b4b8bd21_5bed2652220a8316580462963f3f84b9cfd06da2683da11x", nil)
+
+	// Load your recipient private key (e.g. from environment or secret manager)
+	privKey, _, err := sajberpank.GenerateX25519Key()
+	if err != nil {
+		log.Fatalf("generate key: %v", err)
+	}
 
 	// 1. Execute search query
 	resp, err := apiClient.Search.Query(ctx, sajberpank.SearchOptions{
@@ -436,6 +461,12 @@ resp, err := apiClient.Search.Query(ctx, sajberpank.SearchOptions{
 		Midpoint:     0.5,
 	},
 })
+if err != nil {
+	log.Fatalf("search query failed: %v", err)
+}
+for _, res := range resp.Results {
+	fmt.Printf("[%s] Score: %.4f\n", res.ID, res.Score)
+}
 ```
 
 ---
@@ -458,13 +489,19 @@ resp, err := apiClient.Search.Query(ctx, sajberpank.SearchOptions{
 	},
 	Limit: 5,
 })
+if err != nil {
+	log.Fatalf("recommendation search failed: %v", err)
+}
+for _, res := range resp.Results {
+	fmt.Printf("Similar doc: %s (Score: %.4f)\n", res.ID, res.Score)
+}
 ```
 
 ---
 
 ### 7. Multi-Key Decryption via Keyring
 
-For rotating keys or multi-tenant collections where search results contain documents encrypted with different key IDs:
+For multi-tenant collections or key rotation periods where search results contain documents encrypted under different key IDs:
 
 ```go
 // Configure private keys indexed by their registered KeyID
@@ -474,10 +511,15 @@ ring := sajberpank.Keyring{
 }
 
 for _, res := range resp.Results {
-	if res.EncryptedText != nil {
-		plaintext, err := ring.Open(res.EncryptedText)
+	if res.EncryptedText != nil && res.KeyEnvelope != nil {
+		symKey, err := ring.Decrypt(res.KeyEnvelope)
 		if err != nil {
-			log.Printf("failed to decrypt %s: %v", res.ID, err)
+			log.Printf("failed to decrypt key for %s: %v", res.ID, err)
+			continue
+		}
+		plaintext, err := res.EncryptedText.Decrypt(symKey)
+		if err != nil {
+			log.Printf("failed to decrypt payload for %s: %v", res.ID, err)
 			continue
 		}
 		fmt.Printf("[%s] %s\n", res.ID, string(plaintext))
@@ -487,7 +529,71 @@ for _, res := range resp.Results {
 
 ---
 
-### 8. Account API Key Management
+### 8. Zero-Downtime Key Rotation
+
+When rotating or retiring encryption keys, `client.Search.Keys.Rotate` migrates your collection without downtime.
+
+#### How It Works
+1. The server streams batches of document and keyword key envelopes to the client.
+2. The client unwraps each point's 32-byte symmetric key locally in memory using `OldPrivateKey`.
+3. The client re-encrypts the symmetric key using the public key of `NewKeyName` (automatically fetched and resolved from the Sajberpank API).
+4. The client submits updated key envelopes back to the server in atomic batches.
+
+> [!NOTE]
+> **Zero-Knowledge Security**: `OldPrivateKey` is executed strictly in memory on the client machine and is **never transmitted to the server**. `NewPrivateKey` is not needed by `Rotate` at all because re-encryption requires only the public key.
+>
+> **No Re-indexing Required**: Bulk document contents, search index tokens, and dense vector embeddings remain untouched. Only lightweight 32-byte key envelopes are re-encrypted.
+>
+> **Resumable & Idempotent**: If interrupted by a network timeout or process crash, re-running `Rotate` with the same parameters safely resumes from where it left off.
+
+#### Complete Rotation Workflow
+
+```go
+// Step 1: Generate your new key pair locally
+newPrivKey, newPubKeyBytes, err := sajberpank.GenerateX25519Key()
+if err != nil {
+	log.Fatalf("generate new key: %v", err)
+}
+
+// Step 2: Register ONLY the new public key with Sajberpank
+_, err = apiClient.Search.Keys.Add(ctx, sajberpank.AddKeyOptions{
+	Name:      "new-x25519-key",
+	PublicKey: newPubKeyBytes,
+})
+if err != nil {
+	log.Fatalf("register new key: %v", err)
+}
+
+// Step 3: During migration, configure Keyring with BOTH keys so live searches succeed
+ring := sajberpank.Keyring{
+	"old-x25519-key": oldPrivKey,
+	"new-x25519-key": newPrivKey,
+}
+_ = ring
+
+// Step 4: Run Rotate to migrate all documents and keywords from old key to new key
+result, err := apiClient.Search.Keys.Rotate(ctx, sajberpank.RotateOptions{
+	OldKeyName:    "old-x25519-key",
+	NewKeyName:    "new-x25519-key",
+	OldPrivateKey: oldPrivKey,
+	ProgressCallback: func(updatedCount int) {
+		fmt.Printf("Re-encrypted %d entries...\n", updatedCount)
+	},
+})
+if err != nil {
+	log.Fatalf("key rotation failed: %v", err)
+}
+fmt.Printf("Key rotation complete! Total entries migrated: %d\n", result.UpdatedCount)
+
+// Step 5: After rotation finishes, delete the old public key from Sajberpank
+if err := apiClient.Search.Keys.Delete(ctx, "old-x25519-key"); err != nil {
+	log.Fatalf("delete old key: %v", err)
+}
+```
+
+---
+
+### 9. Account API Key Management
 
 Programmatically generate and manage API keys for worker services:
 
@@ -567,7 +673,7 @@ if err != nil {
 ## Security & Architecture Constraints
 
 ### 1. Zero-Knowledge Blind Storage
-- **Client-Side Decryption Only**: The server stores only RFC 9180 sealed ciphertexts (`enc`, `ciphertext`, `key_id`). The server cannot decrypt or inspect documents at rest.
+- **Client-Side Decryption Only**: The server stores only sealed ciphertexts (AES-256-GCM payload ciphertext + nonce and RFC 9180 HPKE encapsulated key envelope). The server cannot decrypt or inspect documents at rest.
 - **Client-Side Reranking**: Server-side cross-encoder reranking is automatically bypassed for encrypted points. Local reranking can be performed at the client edge after decryption.
 - **Plaintext Payload Attributes Omitted**: Raw document text and custom field strings are never written in plaintext to the vector index.
 

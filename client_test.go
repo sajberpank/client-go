@@ -5,6 +5,8 @@ package sajberpank_test
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/hpke"
 	"encoding/base64"
@@ -588,25 +590,24 @@ func TestSearchService(t *testing.T) {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	kem := hpke.DHKEM(ecdh.X25519())
-	kdf := hpke.HKDFSHA256()
-	aead := hpke.ChaCha20Poly1305()
+	symKey := []byte("12345678901234567890123456789012") // 32 bytes
+	nonce := []byte("123456789012")                      // 12 bytes
+	nonceB64 := base64.StdEncoding.EncodeToString(nonce)
 
-	pubKey, err := kem.NewPublicKey(pubBytes)
+	keyEnvelope, err := client.NewKeyEnvelope(pubBytes, "test-key", symKey)
 	if err != nil {
-		t.Fatalf("new public key: %v", err)
+		t.Fatalf("encrypt key: %v", err)
 	}
 
-	encap, sealer, err := hpke.NewSender(pubKey, kdf, aead, nil)
+	block, err := aes.NewCipher(symKey)
 	if err != nil {
-		t.Fatalf("new sender: %v", err)
+		t.Fatalf("new cipher: %v", err)
 	}
-	ciphertext, err := sealer.Seal(nil, []byte("Decrypted policy content matching query."))
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		t.Fatalf("sealer seal: %v", err)
+		t.Fatalf("new gcm: %v", err)
 	}
-
-	encapB64 := base64.StdEncoding.EncodeToString(encap)
+	ciphertext := gcm.Seal(nil, nonce, []byte("Decrypted policy content matching query."), nil)
 	cipherB64 := base64.StdEncoding.EncodeToString(ciphertext)
 
 	t.Run("Search and Decrypt", func(t *testing.T) {
@@ -625,25 +626,34 @@ func TestSearchService(t *testing.T) {
 						"category":  "policy",
 						"score":     0.88,
 						"pages":     []int32{1, 2},
+						"key_envelope": map[string]any{
+							"key_id":           keyEnvelope.KeyID,
+							"encapsulated_key": keyEnvelope.EncapsulatedKey,
+							"ciphertext":       keyEnvelope.Ciphertext,
+						},
 						"encrypted_references": []map[string]any{
 							{
-								"key_id":     "test-key",
-								"enc":        encapB64,
+								"nonce":      nonceB64,
 								"ciphertext": cipherB64,
 							},
 						},
 						"add_time":      expectedTime.Format(time.RFC3339),
 						"document_time": expectedTime.Format(time.RFC3339),
 						"encrypted_text": map[string]any{
-							"key_id":     "test-key",
-							"enc":        encapB64,
+							"nonce":      nonceB64,
 							"ciphertext": cipherB64,
 						},
 						"encrypted_keywords": []map[string]any{
 							{
-								"key_id":     "test-key",
-								"enc":        encapB64,
-								"ciphertext": cipherB64,
+								"payload": map[string]any{
+									"nonce":      nonceB64,
+									"ciphertext": cipherB64,
+								},
+								"key_envelope": map[string]any{
+									"key_id":           keyEnvelope.KeyID,
+									"encapsulated_key": keyEnvelope.EncapsulatedKey,
+									"ciphertext":       keyEnvelope.Ciphertext,
+								},
 							},
 						},
 					},
@@ -677,21 +687,17 @@ func TestSearchService(t *testing.T) {
 			t.Errorf("unexpected DocumentTime: %v", res.DocumentTime)
 		}
 
-		decrypted, err := resp.Results[0].EncryptedText.Open(priv, kdf, aead, nil)
+		// Decrypt key
+		decKey, err := res.KeyEnvelope.DecryptKey(priv)
 		if err != nil {
-			t.Fatalf("decrypt failed: %v", err)
+			t.Fatalf("decrypt key failed: %v", err)
+		}
+		decrypted, err := res.EncryptedText.Decrypt(decKey)
+		if err != nil {
+			t.Fatalf("decrypt payload failed: %v", err)
 		}
 		if string(decrypted) != "Decrypted policy content matching query." {
 			t.Errorf("got decrypted text %q", string(decrypted))
-		}
-
-		// Test OpenDefault
-		decryptedDefault, err := resp.Results[0].EncryptedText.OpenDefault(priv)
-		if err != nil {
-			t.Fatalf("decrypt default failed: %v", err)
-		}
-		if string(decryptedDefault) != "Decrypted policy content matching query." {
-			t.Errorf("got decrypted text %q", string(decryptedDefault))
 		}
 
 		// Test DecryptText helper
@@ -725,17 +731,17 @@ func TestSearchService(t *testing.T) {
 		ring := client.Keyring{
 			"test-key": priv,
 		}
-		ringDecrypted, err := ring.Open(resp.Results[0].EncryptedText)
+		ringKey, err := ring.Decrypt(res.KeyEnvelope)
 		if err != nil {
-			t.Fatalf("keyring open failed: %v", err)
+			t.Fatalf("keyring DecryptKey failed: %v", err)
 		}
-		if string(ringDecrypted) != "Decrypted policy content matching query." {
-			t.Errorf("got keyring decrypted text %q", string(ringDecrypted))
+		if string(ringKey) != string(symKey) {
+			t.Errorf("got keyring symmetric key %q, want %q", string(ringKey), string(symKey))
 		}
 
 		// Test Keyring missing key
 		emptyRing := client.Keyring{}
-		if _, err := emptyRing.Open(resp.Results[0].EncryptedText); err == nil {
+		if _, err := emptyRing.Decrypt(res.KeyEnvelope); err == nil {
 			t.Errorf("expected error for missing key in keyring, got nil")
 		}
 	})
@@ -1197,70 +1203,66 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	kem := hpke.DHKEM(ecdh.X25519())
-	kdf := hpke.HKDFSHA256()
-	aead := hpke.ChaCha20Poly1305()
+	symKey := []byte("12345678901234567890123456789012") // 32 bytes
+	nonce := []byte("123456789012")                      // 12 bytes
 
-	pubKey, err := kem.NewPublicKey(pubBytes)
+	block, err := aes.NewCipher(symKey)
 	if err != nil {
-		t.Fatalf("new public key: %v", err)
+		t.Fatalf("new cipher: %v", err)
 	}
-
-	encap, sealer, err := hpke.NewSender(pubKey, kdf, aead, client.DefaultPayloadInfo())
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		t.Fatalf("new sender: %v", err)
+		t.Fatalf("new gcm: %v", err)
 	}
-	ciphertext, err := sealer.Seal(nil, []byte("Secret text content"))
-	if err != nil {
-		t.Fatalf("seal: %v", err)
-	}
+	ciphertext := gcm.Seal(nil, nonce, []byte("Secret text content"), nil)
 
 	payload := &client.EncryptedPayload{
-		Enc:        base64.StdEncoding.EncodeToString(encap),
+		Nonce:      base64.StdEncoding.EncodeToString(nonce),
 		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
-		KeyID:      "key-1",
 	}
 
-	t.Run("EncryptedPayload.OpenDefault success", func(t *testing.T) {
-		pt, err := payload.OpenDefault(priv)
+	keyEnvelope, err := client.NewKeyEnvelope(pubBytes, "key-1", symKey)
+	if err != nil {
+		t.Fatalf("encrypt key: %v", err)
+	}
+
+	t.Run("EncryptedPayload.Decrypt success", func(t *testing.T) {
+		pt, err := payload.Decrypt(symKey)
 		if err != nil {
-			t.Fatalf("OpenDefault failed: %v", err)
+			t.Fatalf("Decrypt failed: %v", err)
 		}
 		if string(pt) != "Secret text content" {
 			t.Errorf("got %q, want %q", string(pt), "Secret text content")
 		}
 	})
 
-	t.Run("EncryptedPayload.OpenDefault nil payload", func(t *testing.T) {
+	t.Run("EncryptedPayload.Decrypt nil payload", func(t *testing.T) {
 		var nilPayload *client.EncryptedPayload
-		if _, err := nilPayload.OpenDefault(priv); err == nil {
+		if _, err := nilPayload.Decrypt(symKey); err == nil {
 			t.Error("expected error for nil payload, got nil")
 		}
 	})
 
-	t.Run("EncryptedPayload.Open error on invalid base64 enc", func(t *testing.T) {
-		badPayload := &client.EncryptedPayload{
-			Enc:        "invalid base64 !!",
-			Ciphertext: payload.Ciphertext,
-		}
-		if _, err := badPayload.OpenDefault(priv); err == nil {
-			t.Error("expected base64 decode error, got nil")
+	t.Run("EncryptedPayload.Decrypt invalid key length", func(t *testing.T) {
+		if _, err := payload.Decrypt([]byte("short")); err == nil {
+			t.Error("expected error for short key, got nil")
 		}
 	})
 
-	t.Run("EncryptedPayload.Open error on invalid base64 ciphertext", func(t *testing.T) {
-		badPayload := &client.EncryptedPayload{
-			Enc:        payload.Enc,
-			Ciphertext: "invalid base64 !!",
+	t.Run("KeyEnvelope.DecryptKey success", func(t *testing.T) {
+		decSymKey, err := keyEnvelope.DecryptKey(priv)
+		if err != nil {
+			t.Fatalf("DecryptKey failed: %v", err)
 		}
-		if _, err := badPayload.OpenDefault(priv); err == nil {
-			t.Error("expected base64 decode error, got nil")
+		if string(decSymKey) != string(symKey) {
+			t.Errorf("got %q, want %q", string(decSymKey), string(symKey))
 		}
 	})
 
 	t.Run("SearchResult.DecryptText success", func(t *testing.T) {
 		res := client.SearchResult{
 			ID:            "DOC-1",
+			KeyEnvelope:   keyEnvelope,
 			EncryptedText: payload,
 		}
 		text, err := res.DecryptText(priv)
@@ -1275,6 +1277,7 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 	t.Run("SearchResult.DecryptText nil EncryptedText", func(t *testing.T) {
 		res := client.SearchResult{
 			ID:            "DOC-2",
+			KeyEnvelope:   keyEnvelope,
 			EncryptedText: nil,
 		}
 		text, err := res.DecryptText(priv)
@@ -1286,16 +1289,13 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 		}
 	})
 
-	t.Run("SearchResult.DecryptText error propagation", func(t *testing.T) {
+	t.Run("SearchResult.DecryptText missing KeyEnvelope", func(t *testing.T) {
 		res := client.SearchResult{
-			ID: "DOC-3",
-			EncryptedText: &client.EncryptedPayload{
-				Enc:        "bad",
-				Ciphertext: "bad",
-			},
+			ID:            "DOC-2b",
+			EncryptedText: payload,
 		}
 		if _, err := res.DecryptText(priv); err == nil {
-			t.Error("expected error on corrupt payload, got nil")
+			t.Error("expected error for missing key envelope, got nil")
 		}
 	})
 
@@ -1310,8 +1310,13 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 		}
 
 		resWithKeywords := &client.SearchResult{
-			ID:                "DOC-K2",
-			EncryptedKeywords: []client.EncryptedPayload{*payload},
+			ID: "DOC-K2",
+			EncryptedKeywords: []client.EncryptedKeyword{
+				{
+					Payload:     *payload,
+					KeyEnvelope: *keyEnvelope,
+				},
+			},
 		}
 		kws, err = resWithKeywords.DecryptKeywords(priv)
 		if err != nil {
@@ -1319,16 +1324,6 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 		}
 		if len(kws) != 1 || kws[0] != "Secret text content" {
 			t.Errorf("unexpected keywords: %v", kws)
-		}
-
-		resCorrupt := &client.SearchResult{
-			ID: "DOC-K3",
-			EncryptedKeywords: []client.EncryptedPayload{
-				{Enc: "invalid base64", Ciphertext: "invalid base64"},
-			},
-		}
-		if _, err := resCorrupt.DecryptKeywords(priv); err == nil {
-			t.Error("expected error on corrupt keyword, got nil")
 		}
 	})
 
@@ -1343,7 +1338,8 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 		}
 
 		resWithFields := client.SearchResult{
-			ID: "DOC-F2",
+			ID:          "DOC-F2",
+			KeyEnvelope: keyEnvelope,
 			EncryptedFields: map[string]client.EncryptedPayload{
 				"region": *payload,
 			},
@@ -1355,75 +1351,298 @@ func TestConvenienceCryptoFunctions(t *testing.T) {
 		if len(fields) != 1 || fields["region"] != "Secret text content" {
 			t.Errorf("unexpected fields map: %v", fields)
 		}
+	})
 
-		resCorrupt := client.SearchResult{
-			ID: "DOC-F3",
+	t.Run("SearchResult decryption with DecryptOption custom suites", func(t *testing.T) {
+		p256Priv, p256Pub, err := client.GenerateP256Key()
+		if err != nil {
+			t.Fatalf("generate p256 key: %v", err)
+		}
+		p256Env, err := client.NewKeyEnvelopeWithSuite(p256Pub, "p256-key", symKey, hpke.DHKEM(ecdh.P256()), hpke.HKDFSHA256(), hpke.AES256GCM(), []byte("custom-info"))
+		if err != nil {
+			t.Fatalf("new key envelope: %v", err)
+		}
+		res := client.SearchResult{
+			ID:                  "DOC-SUITE-1",
+			KeyEnvelope:         p256Env,
+			EncryptedText:       payload,
+			EncryptedReferences: []client.EncryptedPayload{*payload},
 			EncryptedFields: map[string]client.EncryptedPayload{
-				"bad": {Enc: "invalid base64", Ciphertext: "invalid base64"},
+				"tag": *payload,
+			},
+			EncryptedKeywords: []client.EncryptedKeyword{
+				{
+					Payload:     *payload,
+					KeyEnvelope: *p256Env,
+				},
 			},
 		}
-		if _, err := resCorrupt.DecryptFields(priv); err == nil {
-			t.Error("expected error on corrupt field payload, got nil")
+
+		// Fails with default suite because it used AES256GCM and custom info:
+		if _, err := res.DecryptText(p256Priv); err == nil {
+			t.Errorf("expected DecryptText to fail with mismatched suite, got nil")
+		}
+
+		customSuite := client.WithSuite(hpke.HKDFSHA256(), hpke.AES256GCM())
+		customInfo := client.WithInfo([]byte("custom-info"))
+
+		// Succeeds with DecryptText and custom DecryptOptions:
+		text, err := res.DecryptText(p256Priv, customSuite, customInfo)
+		if err != nil {
+			t.Fatalf("DecryptText failed: %v", err)
+		}
+		if text != "Secret text content" {
+			t.Errorf("got %q, want %q", text, "Secret text content")
+		}
+
+		// Succeeds with DecryptFields:
+		fields, err := res.DecryptFields(p256Priv, customSuite, customInfo)
+		if err != nil {
+			t.Fatalf("DecryptFields failed: %v", err)
+		}
+		if fields["tag"] != "Secret text content" {
+			t.Errorf("got %q, want %q", fields["tag"], "Secret text content")
+		}
+
+		// Succeeds with DecryptReferences:
+		refs, err := res.DecryptReferences(p256Priv, customSuite, customInfo)
+		if err != nil {
+			t.Fatalf("DecryptReferences failed: %v", err)
+		}
+		if len(refs) != 1 || refs[0] != "Secret text content" {
+			t.Errorf("got %v, want [Secret text content]", refs)
+		}
+
+		// Succeeds with DecryptKeywords:
+		kws, err := res.DecryptKeywords(p256Priv, customSuite, customInfo)
+		if err != nil {
+			t.Fatalf("DecryptKeywords failed: %v", err)
+		}
+		if len(kws) != 1 || kws[0] != "Secret text content" {
+			t.Errorf("got %v, want [Secret text content]", kws)
+		}
+
+		// Succeeds with Keyring.Decrypt and custom DecryptOptions:
+		ring := client.Keyring{"p256-key": p256Priv}
+		ringKey, err := ring.Decrypt(p256Env, customSuite, customInfo)
+		if err != nil {
+			t.Fatalf("Keyring.Decrypt failed: %v", err)
+		}
+		if string(ringKey) != string(symKey) {
+			t.Errorf("got %q, want %q", string(ringKey), string(symKey))
 		}
 	})
 
-	t.Run("Keyring.Open success and missing key", func(t *testing.T) {
+	t.Run("Keyring.DecryptKey success and missing key", func(t *testing.T) {
 		ring := client.Keyring{
 			"key-1": priv,
 		}
 
-		pt, err := ring.Open(payload)
+		pt, err := ring.Decrypt(keyEnvelope)
 		if err != nil {
-			t.Fatalf("keyring Open failed: %v", err)
+			t.Fatalf("keyring DecryptKey failed: %v", err)
 		}
-		if string(pt) != "Secret text content" {
-			t.Errorf("got %q, want %q", string(pt), "Secret text content")
+		if string(pt) != string(symKey) {
+			t.Errorf("got %q, want %q", string(pt), string(symKey))
 		}
 
 		// Missing key in keyring
-		missingPayload := &client.EncryptedPayload{
-			Enc:        payload.Enc,
-			Ciphertext: payload.Ciphertext,
-			KeyID:      "unknown-key",
+		missingKey := &client.KeyEnvelope{
+			KeyID:           "unknown-key",
+			EncapsulatedKey: keyEnvelope.EncapsulatedKey,
+			Ciphertext:      keyEnvelope.Ciphertext,
 		}
-		if _, err := ring.Open(missingPayload); err == nil {
+		if _, err := ring.Decrypt(missingKey); err == nil {
 			t.Error("expected error for missing key in keyring, got nil")
 		}
 
 		// Nil payload in keyring
-		if _, err := ring.Open(nil); err == nil {
-			t.Error("expected error for nil payload, got nil")
+		if _, err := ring.Decrypt(nil); err == nil {
+			t.Error("expected error for nil key, got nil")
 		}
 	})
+}
 
-	t.Run("Keyring.OpenWithSuite custom suite", func(t *testing.T) {
-		customInfo := []byte("custom-tag")
-		encapCustom, sealerCustom, err := hpke.NewSender(pubKey, kdf, aead, customInfo)
-		if err != nil {
-			t.Fatalf("new sender: %v", err)
+func TestKeysService_Rotate(t *testing.T) {
+	ctx := context.Background()
+	oldPriv, _, err := client.GenerateX25519Key()
+	if err != nil {
+		t.Fatalf("generate old key: %v", err)
+	}
+	_, newPub, err := client.GenerateX25519Key()
+	if err != nil {
+		t.Fatalf("generate new key: %v", err)
+	}
+
+	symKey := []byte("secret-symmetric-key-32-bytes!!")
+	oldKeyEnvelope, err := client.NewKeyEnvelope(oldPriv.PublicKey().Bytes(), "old-key", symKey)
+	if err != nil {
+		t.Fatalf("encrypt key: %v", err)
+	}
+
+	var batchCount int
+	c, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/search/keys/new-key" && r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":       "new-key",
+				"public_key": base64.StdEncoding.EncodeToString(newPub),
+			})
+			return
 		}
-		cipherCustom, err := sealerCustom.Seal(nil, []byte("Custom suite text"))
-		if err != nil {
-			t.Fatalf("seal: %v", err)
+		if r.URL.Path != "/v1/search/keys/rotate" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		if batchCount == 0 {
+			// First call (start rotation)
+			batchCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"session_id": "sess-123",
+				"entries": []map[string]any{
+					{
+						"id": "item-1",
+						"key_envelope": map[string]any{
+							"key_id":           oldKeyEnvelope.KeyID,
+							"encapsulated_key": oldKeyEnvelope.EncapsulatedKey,
+							"ciphertext":       oldKeyEnvelope.Ciphertext,
+						},
+					},
+				},
+				"done":          false,
+				"updated_count": 0,
+			})
+			return
 		}
 
-		customPayload := &client.EncryptedPayload{
-			Enc:        base64.StdEncoding.EncodeToString(encapCustom),
-			Ciphertext: base64.StdEncoding.EncodeToString(cipherCustom),
-			KeyID:      "key-1",
+		// Second call (receive re-encrypted batch and finish)
+		entries, _ := req["entries"].([]any)
+		if len(entries) != 1 {
+			t.Errorf("expected 1 entry, got %d", len(entries))
 		}
-
-		ring := client.Keyring{
-			"key-1": priv,
-		}
-		pt, err := ring.OpenWithSuite(customPayload, kdf, aead, customInfo)
-		if err != nil {
-			t.Fatalf("OpenWithSuite failed: %v", err)
-		}
-		if string(pt) != "Custom suite text" {
-			t.Errorf("got %q, want %q", string(pt), "Custom suite text")
-		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"session_id":    "sess-123",
+			"entries":       []any{},
+			"done":          true,
+			"updated_count": 1,
+		})
 	})
+
+	var progressNotified int
+	res, err := c.Search.Keys.Rotate(ctx, client.RotateOptions{
+		OldKeyName:    "old-key",
+		NewKeyName:    "new-key",
+		OldPrivateKey: oldPriv,
+		ProgressCallback: func(count int) {
+			progressNotified = count
+		},
+	})
+	if err != nil {
+		t.Fatalf("Rotate failed: %v", err)
+	}
+	if res.UpdatedCount != 1 {
+		t.Errorf("expected UpdatedCount 1, got %d", res.UpdatedCount)
+	}
+	if progressNotified != 1 {
+		t.Errorf("expected progressNotified 1, got %d", progressNotified)
+	}
+
+	// Test that missing new key fails early before rotation
+	_, err = c.Search.Keys.Rotate(ctx, client.RotateOptions{
+		OldKeyName:    "old-key",
+		NewKeyName:    "nonexistent-key",
+		OldPrivateKey: oldPriv,
+	})
+	if err == nil {
+		t.Fatalf("expected error for nonexistent new key, got nil")
+	}
+
+	// Test rotation to a P-256 key with auto-suite resolution
+	p256Priv, p256Pub, err := client.GenerateP256Key()
+	if err != nil {
+		t.Fatalf("generate p256 key: %v", err)
+	}
+
+	var p256BatchCount int
+	var receivedP256Envelope client.KeyEnvelope
+	cP256, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/search/keys/p256-key" && r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":       "p256-key",
+				"public_key": base64.StdEncoding.EncodeToString(p256Pub),
+				"kem":        "HPKE_KEM_DHKEM_P256_HKDF_SHA256",
+				"kdf":        "HPKE_KDF_HKDF_SHA256",
+				"aead":       "HPKE_AEAD_CHACHA20_POLY1305",
+			})
+			return
+		}
+		if r.URL.Path != "/v1/search/keys/rotate" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		if p256BatchCount == 0 {
+			p256BatchCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"session_id": "sess-p256",
+				"entries": []map[string]any{
+					{
+						"id": "item-p256",
+						"key_envelope": map[string]any{
+							"key_id":           oldKeyEnvelope.KeyID,
+							"encapsulated_key": oldKeyEnvelope.EncapsulatedKey,
+							"ciphertext":       oldKeyEnvelope.Ciphertext,
+						},
+					},
+				},
+				"done":          false,
+				"updated_count": 0,
+			})
+			return
+		}
+
+		entries, _ := req["entries"].([]any)
+		if len(entries) == 1 {
+			kMap := entries[0].(map[string]any)
+			ekMap := kMap["key_envelope"].(map[string]any)
+			receivedP256Envelope = client.KeyEnvelope{
+				KeyID:           ekMap["key_id"].(string),
+				EncapsulatedKey: ekMap["encapsulated_key"].(string),
+				Ciphertext:      ekMap["ciphertext"].(string),
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"session_id":    "sess-p256",
+			"entries":       []any{},
+			"done":          true,
+			"updated_count": 1,
+		})
+	})
+
+	resP256, err := cP256.Search.Keys.Rotate(ctx, client.RotateOptions{
+		OldKeyName:    "old-key",
+		NewKeyName:    "p256-key",
+		OldPrivateKey: oldPriv,
+	})
+	if err != nil {
+		t.Fatalf("Rotate to P-256 key failed: %v", err)
+	}
+	if resP256.UpdatedCount != 1 {
+		t.Errorf("expected UpdatedCount 1, got %d", resP256.UpdatedCount)
+	}
+
+	// Verify the re-encrypted envelope can be decrypted using the new P-256 private key!
+	decryptedSymKey, err := receivedP256Envelope.DecryptKey(p256Priv)
+	if err != nil {
+		t.Fatalf("decrypt re-encrypted P-256 envelope: %v", err)
+	}
+	if string(decryptedSymKey) != string(symKey) {
+		t.Errorf("decrypted symmetric key mismatch: got %q, want %q", decryptedSymKey, symKey)
+	}
 }
 
 func TestFieldErrorFormatting(t *testing.T) {

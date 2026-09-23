@@ -5,6 +5,7 @@ package sajberpank
 
 import (
 	"context"
+	"crypto/hpke"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -119,4 +120,141 @@ func (s *KeysService) Delete(ctx context.Context, name string) error {
 	}
 	path := fmt.Sprintf("/v1/search/keys/%s", url.PathEscape(name))
 	return s.client.request(ctx, http.MethodDelete, path, nil, nil)
+}
+
+// RotateOptions contains parameters for rotating from an old key to a new key.
+type RotateOptions struct {
+	// OldKeyName is the registered name of the key to migrate away from.
+	OldKeyName string
+	// NewKeyName is the registered name of the key to migrate to.
+	// This key must already be registered with Search.Keys.Add before calling Rotate.
+	NewKeyName string
+	// OldPrivateKey is the recipient private key for OldKeyName, used strictly locally
+	// to decrypt the wrapped symmetric key for each point. It is never transmitted to the server.
+	OldPrivateKey hpke.PrivateKey
+	// OldDecryptOptions specifies optional cipher suite parameters (e.g. WithSuite, WithInfo)
+	// needed to decrypt envelopes wrapped with OldKeyName if it used non-default algorithms.
+	OldDecryptOptions []DecryptOption
+	// ProgressCallback is an optional hook invoked after each batch with the running total of migrated items.
+	ProgressCallback func(migratedCount int)
+}
+
+// RotateResult contains the outcome of a key rotation operation.
+type RotateResult struct {
+	// UpdatedCount is the total number of document and keyword key envelopes re-encrypted.
+	UpdatedCount int
+}
+
+type rotateKeysEntryBody struct {
+	ID          string          `json:"id"`
+	KeyEnvelope keyEnvelopeBody `json:"key_envelope"`
+}
+
+type rotateKeysRequestBody struct {
+	OldKeyName string                `json:"old_key_name,omitempty"`
+	NewKeyName string                `json:"new_key_name,omitempty"`
+	SessionID  string                `json:"session_id,omitempty"`
+	Entries    []rotateKeysEntryBody `json:"entries,omitempty"`
+}
+
+type rotateKeysResponseBody struct {
+	SessionID    string                `json:"session_id,omitempty"`
+	Entries      []rotateKeysEntryBody `json:"entries,omitempty"`
+	Done         bool                  `json:"done"`
+	UpdatedCount int                   `json:"updated_count"`
+}
+
+// Rotate migrates all documents and keywords encrypted with OldKeyName to NewKeyName.
+//
+// Key Rotation Workflow:
+//  1. Generate a new HPKE key pair locally (e.g. via GenerateX25519Key).
+//  2. Register the new public key using Search.Keys.Add with NewKeyName.
+//  3. Add the new private key to your application's Keyring alongside OldPrivateKey
+//     so that live searches during migration can decrypt both old and new items.
+//  4. Call Rotate with OldKeyName, NewKeyName, and OldPrivateKey.
+//  5. Once Rotate completes, safely delete the old key using Search.Keys.Delete.
+//
+// Security & Operation Guarantees:
+//   - Zero-Knowledge Security: OldPrivateKey is executed strictly in memory on the client
+//     machine to decrypt data encryption keys. It is never sent to the server.
+//   - NewPrivateKey Not Needed: Re-encryption only requires the public key of NewKeyName,
+//     which Rotate retrieves automatically from the API.
+//   - Zero Downtime: Document text, vectors, and metadata fields are untouched.
+//     Only 32-byte key envelopes are re-encrypted in streaming atomic batches.
+//   - Resumable & Idempotent: If interrupted by a network issue, re-running Rotate with the
+//     same parameters safely resumes from the remaining unmigrated envelopes.
+func (s *KeysService) Rotate(ctx context.Context, o RotateOptions) (*RotateResult, error) {
+	if strings.TrimSpace(o.OldKeyName) == "" {
+		return nil, ErrInvalidKeyName
+	}
+	if strings.TrimSpace(o.NewKeyName) == "" {
+		return nil, ErrInvalidKeyName
+	}
+	if o.OldPrivateKey == nil {
+		return nil, fmt.Errorf("old private key is required")
+	}
+
+	newKey, err := s.Get(ctx, o.NewKeyName)
+	if err != nil {
+		return nil, fmt.Errorf("get new key %q: %w", o.NewKeyName, err)
+	}
+	newPublicKey, err := newKey.PublicKeyBytes()
+	if err != nil {
+		return nil, fmt.Errorf("decode new public key %q: %w", o.NewKeyName, err)
+	}
+
+	kem, kdf, aead, err := resolveSuite(newKey.KEM, newKey.KDF, newKey.AEAD)
+	if err != nil {
+		return nil, fmt.Errorf("resolve cipher suite for new key %q: %w", o.NewKeyName, err)
+	}
+
+	// 1. Initial request to start rotation session
+	reqBody := rotateKeysRequestBody{
+		OldKeyName: o.OldKeyName,
+		NewKeyName: o.NewKeyName,
+	}
+	var respBody rotateKeysResponseBody
+	if err := s.client.request(ctx, http.MethodPost, "/v1/search/keys/rotate", reqBody, &respBody); err != nil {
+		return nil, err
+	}
+
+	totalUpdated := respBody.UpdatedCount
+
+	for !respBody.Done {
+		items := respBody.Entries
+		if len(items) == 0 {
+			break
+		}
+
+		for i, item := range items {
+			ek := KeyEnvelope(item.KeyEnvelope)
+			symKey, err := ek.DecryptKey(o.OldPrivateKey, o.OldDecryptOptions...)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt symmetric key for item %s: %w", item.ID, err)
+			}
+			newEk, err := newKeyEnvelopeWithSuite(newPublicKey, o.NewKeyName, symKey, kem, kdf, aead, nil)
+			if err != nil {
+				return nil, fmt.Errorf("re-encrypt symmetric key for item %s: %w", item.ID, err)
+			}
+			items[i].KeyEnvelope = keyEnvelopeBody(*newEk)
+		}
+
+		reqBody = rotateKeysRequestBody{
+			SessionID: respBody.SessionID,
+			Entries:   items,
+		}
+		respBody = rotateKeysResponseBody{}
+		if err := s.client.request(ctx, http.MethodPost, "/v1/search/keys/rotate", reqBody, &respBody); err != nil {
+			return nil, err
+		}
+
+		totalUpdated = respBody.UpdatedCount
+		if o.ProgressCallback != nil {
+			o.ProgressCallback(totalUpdated)
+		}
+	}
+
+	return &RotateResult{
+		UpdatedCount: totalUpdated,
+	}, nil
 }

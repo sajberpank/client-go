@@ -61,11 +61,28 @@ type SearchOptions struct {
 	Temporal             *TemporalOptions
 }
 
-// EncryptedPayload represents base64-encoded encrypted payload and key metadata.
+// EncryptedPayload represents base64-encoded encrypted payload.
 type EncryptedPayload struct {
-	Enc        string
+	// Nonce is the base64-encoded initialization vector.
+	Nonce string
+	// Ciphertext is the base64-encoded encrypted data.
 	Ciphertext string
-	KeyID      string
+}
+
+// KeyEnvelope represents base64-encoded encapsulated key and encrypted symmetric key.
+type KeyEnvelope struct {
+	// KeyID is the identifier of the recipient public key used for encapsulation.
+	KeyID string
+	// EncapsulatedKey is the base64-encoded HPKE encapsulated key.
+	EncapsulatedKey string
+	// Ciphertext is the base64-encoded encrypted symmetric key.
+	Ciphertext string
+}
+
+// EncryptedKeyword represents an encrypted keyword and its encrypted symmetric key envelope.
+type EncryptedKeyword struct {
+	Payload     EncryptedPayload
+	KeyEnvelope KeyEnvelope
 }
 
 // SearchResult represents an encrypted matching document returned by search.
@@ -77,9 +94,10 @@ type SearchResult struct {
 	Pages               []int32
 	AddTime             time.Time
 	DocumentTime        *time.Time
+	KeyEnvelope         *KeyEnvelope
 	EncryptedText       *EncryptedPayload
 	EncryptedFields     map[string]EncryptedPayload
-	EncryptedKeywords   []EncryptedPayload
+	EncryptedKeywords   []EncryptedKeyword
 	EncryptedReferences []EncryptedPayload
 }
 
@@ -115,9 +133,19 @@ type searchQueryRequestBody struct {
 }
 
 type encryptedPayloadBody struct {
-	Enc        string `json:"enc"`
+	Nonce      string `json:"nonce"`
 	Ciphertext string `json:"ciphertext"`
-	KeyID      string `json:"key_id,omitempty"`
+}
+
+type keyEnvelopeBody struct {
+	KeyID           string `json:"key_id"`
+	EncapsulatedKey string `json:"encapsulated_key"`
+	Ciphertext      string `json:"ciphertext"`
+}
+
+type encryptedKeywordBody struct {
+	Payload     encryptedPayloadBody `json:"payload"`
+	KeyEnvelope *keyEnvelopeBody     `json:"key_envelope,omitempty"`
 }
 
 type searchResultBody struct {
@@ -128,9 +156,10 @@ type searchResultBody struct {
 	Pages               []int32                         `json:"pages,omitempty"`
 	AddTime             time.Time                       `json:"add_time"`
 	DocumentTime        *time.Time                      `json:"document_time,omitempty"`
+	KeyEnvelope         *keyEnvelopeBody                `json:"key_envelope,omitempty"`
 	EncryptedText       *encryptedPayloadBody           `json:"encrypted_text,omitempty"`
 	EncryptedFields     map[string]encryptedPayloadBody `json:"encrypted_fields,omitempty"`
-	EncryptedKeywords   []encryptedPayloadBody          `json:"encrypted_keywords,omitempty"`
+	EncryptedKeywords   []encryptedKeywordBody          `json:"encrypted_keywords,omitempty"`
 	EncryptedReferences []encryptedPayloadBody          `json:"encrypted_references,omitempty"`
 }
 
@@ -174,8 +203,21 @@ func toEncryptedPayload(body *encryptedPayloadBody) *EncryptedPayload {
 	if body == nil {
 		return nil
 	}
-	p := EncryptedPayload(*body)
-	return &p
+	return &EncryptedPayload{
+		Nonce:      body.Nonce,
+		Ciphertext: body.Ciphertext,
+	}
+}
+
+func toKeyEnvelope(body *keyEnvelopeBody) *KeyEnvelope {
+	if body == nil {
+		return nil
+	}
+	return &KeyEnvelope{
+		KeyID:           body.KeyID,
+		EncapsulatedKey: body.EncapsulatedKey,
+		Ciphertext:      body.Ciphertext,
+	}
 }
 
 func toEncryptedPayloadMap(bodies map[string]encryptedPayloadBody) map[string]EncryptedPayload {
@@ -190,11 +232,25 @@ func toEncryptedPayloadMap(bodies map[string]encryptedPayloadBody) map[string]En
 }
 
 func toSearchResult(body searchResultBody) SearchResult {
-	var keywords []EncryptedPayload
+	var keywords []EncryptedKeyword
 	if body.EncryptedKeywords != nil {
-		keywords = make([]EncryptedPayload, len(body.EncryptedKeywords))
+		keywords = make([]EncryptedKeyword, len(body.EncryptedKeywords))
 		for i, kw := range body.EncryptedKeywords {
-			keywords[i] = EncryptedPayload(kw)
+			var ke KeyEnvelope
+			if kw.KeyEnvelope != nil {
+				ke = KeyEnvelope{
+					KeyID:           kw.KeyEnvelope.KeyID,
+					EncapsulatedKey: kw.KeyEnvelope.EncapsulatedKey,
+					Ciphertext:      kw.KeyEnvelope.Ciphertext,
+				}
+			}
+			keywords[i] = EncryptedKeyword{
+				Payload: EncryptedPayload{
+					Nonce:      kw.Payload.Nonce,
+					Ciphertext: kw.Payload.Ciphertext,
+				},
+				KeyEnvelope: ke,
+			}
 		}
 	}
 
@@ -206,6 +262,8 @@ func toSearchResult(body searchResultBody) SearchResult {
 		}
 	}
 
+	env := toKeyEnvelope(body.KeyEnvelope)
+
 	return SearchResult{
 		ID:                  body.ID,
 		Namespace:           body.Namespace,
@@ -214,6 +272,7 @@ func toSearchResult(body searchResultBody) SearchResult {
 		Pages:               body.Pages,
 		AddTime:             body.AddTime,
 		DocumentTime:        body.DocumentTime,
+		KeyEnvelope:         env,
 		EncryptedText:       toEncryptedPayload(body.EncryptedText),
 		EncryptedFields:     toEncryptedPayloadMap(body.EncryptedFields),
 		EncryptedKeywords:   keywords,
@@ -232,26 +291,45 @@ func toSearchResponse(body searchResponseBody) *SearchResponse {
 	}
 }
 
-// DecryptText decrypts the EncryptedText payload using the provided recipient private key and default cipher suite.
-func (r *SearchResult) DecryptText(priv hpke.PrivateKey) (string, error) {
+func (r *SearchResult) decryptSymmetricKey(priv hpke.PrivateKey, opts ...DecryptOption) ([]byte, error) {
+	if r.KeyEnvelope == nil {
+		return nil, fmt.Errorf("missing key envelope for result %q", r.ID)
+	}
+	symKey, err := r.KeyEnvelope.DecryptKey(priv, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt symmetric key: %w", err)
+	}
+	return symKey, nil
+}
+
+// DecryptText decrypts the EncryptedText payload using the document's KeyEnvelope, recipient private key, and optional HPKE cipher suite parameters.
+func (r *SearchResult) DecryptText(priv hpke.PrivateKey, opts ...DecryptOption) (string, error) {
 	if r.EncryptedText == nil {
 		return "", nil
 	}
-	b, err := r.EncryptedText.OpenDefault(priv)
+	symKey, err := r.decryptSymmetricKey(priv, opts...)
+	if err != nil {
+		return "", err
+	}
+	b, err := r.EncryptedText.Decrypt(symKey, []byte(r.ID))
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
 }
 
-// DecryptReferences decrypts all EncryptedReferences payloads using the provided recipient private key and default cipher suite.
-func (r *SearchResult) DecryptReferences(priv hpke.PrivateKey) ([]string, error) {
+// DecryptReferences decrypts all EncryptedReferences payloads using the document's KeyEnvelope, recipient private key, and optional HPKE cipher suite parameters.
+func (r *SearchResult) DecryptReferences(priv hpke.PrivateKey, opts ...DecryptOption) ([]string, error) {
 	if len(r.EncryptedReferences) == 0 {
 		return nil, nil
 	}
+	symKey, err := r.decryptSymmetricKey(priv, opts...)
+	if err != nil {
+		return nil, err
+	}
 	refs := make([]string, 0, len(r.EncryptedReferences))
 	for i, encRef := range r.EncryptedReferences {
-		b, err := encRef.OpenDefault(priv)
+		b, err := encRef.Decrypt(symKey, []byte(r.ID))
 		if err != nil {
 			return nil, fmt.Errorf("decrypt reference %d: %w", i, err)
 		}
@@ -260,30 +338,34 @@ func (r *SearchResult) DecryptReferences(priv hpke.PrivateKey) ([]string, error)
 	return refs, nil
 }
 
-// DecryptKeywords decrypts all EncryptedKeywords payloads using the provided recipient private key and default cipher suite.
-func (r *SearchResult) DecryptKeywords(priv hpke.PrivateKey) ([]string, error) {
+// DecryptKeywords decrypts all EncryptedKeywords payloads using the recipient private key and optional HPKE cipher suite parameters.
+func (r *SearchResult) DecryptKeywords(priv hpke.PrivateKey, opts ...DecryptOption) ([]string, error) {
 	if len(r.EncryptedKeywords) == 0 {
 		return nil, nil
 	}
 	kws := make([]string, 0, len(r.EncryptedKeywords))
 	for i, encKw := range r.EncryptedKeywords {
-		b, err := encKw.OpenDefault(priv)
+		kw, err := encKw.Decrypt(priv, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt keyword %d: %w", i, err)
 		}
-		kws = append(kws, string(b))
+		kws = append(kws, kw)
 	}
 	return kws, nil
 }
 
-// DecryptFields decrypts all EncryptedFields payloads using the provided recipient private key and default cipher suite.
-func (r *SearchResult) DecryptFields(priv hpke.PrivateKey) (map[string]string, error) {
+// DecryptFields decrypts all EncryptedFields payloads using the document's KeyEnvelope, recipient private key, and optional HPKE cipher suite parameters.
+func (r *SearchResult) DecryptFields(priv hpke.PrivateKey, opts ...DecryptOption) (map[string]string, error) {
 	if len(r.EncryptedFields) == 0 {
 		return nil, nil
 	}
+	symKey, err := r.decryptSymmetricKey(priv, opts...)
+	if err != nil {
+		return nil, err
+	}
 	fields := make(map[string]string, len(r.EncryptedFields))
 	for name, encField := range r.EncryptedFields {
-		b, err := encField.OpenDefault(priv)
+		b, err := encField.Decrypt(symKey, []byte(r.ID))
 		if err != nil {
 			return nil, fmt.Errorf("decrypt field %q: %w", name, err)
 		}

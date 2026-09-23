@@ -5,8 +5,8 @@ package sajberpank_test
 
 import (
 	"context"
-	"crypto/ecdh"
-	"crypto/hpke"
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -180,21 +180,22 @@ func ExampleDocumentsService_GetStatus() {
 func ExampleSearchService_Query() {
 	ctx := context.Background()
 
-	// Generate a recipient key pair for demonstration
 	privKey, pubBytes, err := sajberpank.GenerateX25519Key()
 	if err != nil {
 		log.Fatalf("generate key: %v", err)
 	}
 
-	kem := hpke.DHKEM(ecdh.X25519())
-	kdf := hpke.HKDFSHA256()
-	aead := hpke.ChaCha20Poly1305()
-	pubKey, _ := kem.NewPublicKey(pubBytes)
-	encap, sealer, _ := hpke.NewSender(pubKey, kdf, aead, sajberpank.DefaultPayloadInfo())
-	cipher, _ := sealer.Seal(nil, []byte("Decrypted legal clause text."))
+	symKey := []byte("12345678901234567890123456789012") // 32 bytes
+	nonce := []byte("123456789012")                      // 12 bytes
 
-	encB64 := base64.StdEncoding.EncodeToString(encap)
-	cipherB64 := base64.StdEncoding.EncodeToString(cipher)
+	keyEnvelope, _ := sajberpank.NewKeyEnvelope(pubBytes, "primary-x25519-key", symKey)
+
+	block, _ := aes.NewCipher(symKey)
+	gcm, _ := cipher.NewGCM(block)
+	ciphertext := gcm.Seal(nil, nonce, []byte("Decrypted legal clause text."), nil)
+
+	nonceB64 := base64.StdEncoding.EncodeToString(nonce)
+	cipherB64 := base64.StdEncoding.EncodeToString(ciphertext)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -204,13 +205,17 @@ func ExampleSearchService_Query() {
 				"namespace": "legal-corp",
 				"category": "contracts",
 				"score": 0.9421,
-				"encrypted_text": {
+				"key_envelope": {
 					"key_id": "primary-x25519-key",
-					"enc": %q,
+					"encapsulated_key": %q,
+					"ciphertext": %q
+				},
+				"encrypted_text": {
+					"nonce": %q,
 					"ciphertext": %q
 				}
 			}]
-		}`, encB64, cipherB64)
+		}`, keyEnvelope.EncapsulatedKey, keyEnvelope.Ciphertext, nonceB64, cipherB64)
 	}))
 	defer ts.Close()
 
@@ -291,16 +296,17 @@ func ExampleSearchService_Query_decryptFields() {
 		log.Fatalf("generate key: %v", err)
 	}
 
-	kem := hpke.DHKEM(ecdh.X25519())
-	kdf := hpke.HKDFSHA256()
-	aead := hpke.ChaCha20Poly1305()
-	pubKey, _ := kem.NewPublicKey(pubBytes)
+	symKey := []byte("12345678901234567890123456789012") // 32 bytes
+	nonceField := []byte("123456789012")
+	nonceKw := []byte("123456789013")
 
-	encField, sealerField, _ := hpke.NewSender(pubKey, kdf, aead, sajberpank.DefaultPayloadInfo())
-	cipherField, _ := sealerField.Seal(nil, []byte("EMEA"))
+	keyEnvelope, _ := sajberpank.NewKeyEnvelope(pubBytes, "primary-x25519-key", symKey)
 
-	encKw, sealerKw, _ := hpke.NewSender(pubKey, kdf, aead, sajberpank.DefaultPayloadInfo())
-	cipherKw, _ := sealerKw.Seal(nil, []byte("liability"))
+	block, _ := aes.NewCipher(symKey)
+	gcm, _ := cipher.NewGCM(block)
+
+	cipherField := gcm.Seal(nil, nonceField, []byte("EMEA"), nil)
+	cipherKw := gcm.Seal(nil, nonceKw, []byte("liability"), nil)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -310,24 +316,36 @@ func ExampleSearchService_Query_decryptFields() {
 				"namespace": "legal-corp",
 				"category": "contracts",
 				"score": 0.95,
+				"key_envelope": {
+					"key_id": "primary-x25519-key",
+					"encapsulated_key": %q,
+					"ciphertext": %q
+				},
 				"encrypted_fields": {
 					"region": {
-						"key_id": "primary-x25519-key",
-						"enc": %q,
+						"nonce": %q,
 						"ciphertext": %q
 					}
 				},
 				"encrypted_keywords": [{
-					"key_id": "primary-x25519-key",
-					"enc": %q,
-					"ciphertext": %q
+					"payload": {
+						"nonce": %q,
+						"ciphertext": %q
+					},
+					"key_envelope": {
+						"key_id": "primary-x25519-key",
+						"encapsulated_key": %q,
+						"ciphertext": %q
+					}
 				}]
 			}]
 		}`,
-			base64.StdEncoding.EncodeToString(encField),
+			keyEnvelope.EncapsulatedKey, keyEnvelope.Ciphertext,
+			base64.StdEncoding.EncodeToString(nonceField),
 			base64.StdEncoding.EncodeToString(cipherField),
-			base64.StdEncoding.EncodeToString(encKw),
+			base64.StdEncoding.EncodeToString(nonceKw),
 			base64.StdEncoding.EncodeToString(cipherKw),
+			keyEnvelope.EncapsulatedKey, keyEnvelope.Ciphertext,
 		)
 	}))
 	defer ts.Close()
@@ -367,31 +385,22 @@ func ExampleSearchService_Query_decryptFields() {
 func ExampleKeyring() {
 	// Generate key pair
 	privKey, pubBytes, _ := sajberpank.GenerateX25519Key()
-	kem := hpke.DHKEM(ecdh.X25519())
-	kdf := hpke.HKDFSHA256()
-	aead := hpke.ChaCha20Poly1305()
-	pubKey, _ := kem.NewPublicKey(pubBytes)
-	encap, sealer, _ := hpke.NewSender(pubKey, kdf, aead, sajberpank.DefaultPayloadInfo())
-	cipher, _ := sealer.Seal(nil, []byte("Decrypted multi-key content"))
+	symKey := []byte("12345678901234567890123456789012") // 32 bytes
 
-	payload := &sajberpank.EncryptedPayload{
-		Enc:        base64.StdEncoding.EncodeToString(encap),
-		Ciphertext: base64.StdEncoding.EncodeToString(cipher),
-		KeyID:      "primary-x25519-key",
-	}
+	keyEnvelope, _ := sajberpank.NewKeyEnvelope(pubBytes, "primary-x25519-key", symKey)
 
 	// Configure private keys indexed by their registered KeyID
 	ring := sajberpank.Keyring{
 		"primary-x25519-key": privKey,
 	}
 
-	plaintext, err := ring.Open(payload)
+	decryptedKey, err := ring.Decrypt(keyEnvelope)
 	if err != nil {
 		log.Fatalf("keyring decryption failed: %v", err)
 	}
-	fmt.Printf("Decrypted from keyring: %s\n", string(plaintext))
+	fmt.Printf("Decrypted key length: %d\n", len(decryptedKey))
 	// Output:
-	// Decrypted from keyring: Decrypted multi-key content
+	// Decrypted key length: 32
 }
 
 func ExampleAccountKeysService_CreateWithOptions() {
