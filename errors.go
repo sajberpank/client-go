@@ -233,6 +233,7 @@ var (
 	ErrInvalidDocumentID      = errors.New("invalid document id")
 	ErrMissingDocumentContent = errors.New("missing document content")
 	ErrInvalidDocumentContent = errors.New("invalid document content")
+	ErrServiceUnavailable     = errors.New("service unavailable")
 )
 
 type fieldErrorBody struct {
