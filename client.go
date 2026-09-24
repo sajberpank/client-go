@@ -62,6 +62,17 @@ func New(apiKey string, o *ClientOptions) *Client {
 		httpClient = &http.Client{
 			Timeout: 30 * time.Second,
 		}
+	} else {
+		httpClientCopy := *httpClient
+		httpClient = &httpClientCopy
+	}
+
+	transport := httpClient.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	if _, ok := transport.(*circuitBreakerTransport); !ok {
+		httpClient.Transport = newCircuitBreakerTransport(transport)
 	}
 
 	baseURL := o.BaseURL
