@@ -312,6 +312,96 @@ func TestDocumentsService(t *testing.T) {
 		}
 	})
 
+	t.Run("Add with Markdown", func(t *testing.T) {
+		var receivedBody map[string]any
+		c, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/v1/search/documents" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			_ = json.NewDecoder(r.Body).Decode(&receivedBody)
+
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":        receivedBody["id"],
+				"namespace": receivedBody["namespace"].(string) + ":" + receivedBody["category"].(string),
+				"added":     true,
+			})
+		})
+
+		resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Markdown]{
+			Namespace: "insureme",
+			Category:  "policy",
+			ID:        "POL-MD-1",
+			KeyName:   "primary-key",
+			Content: client.Markdown{
+				Content: "# Header\n\nMarkdown content goes here.",
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.ID != "POL-MD-1" || !resp.Added {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+		if receivedBody["markdown"] != "# Header\n\nMarkdown content goes here." {
+			t.Errorf("got markdown %v", receivedBody["markdown"])
+		}
+	})
+
+	t.Run("Add with MarkdownDocument options", func(t *testing.T) {
+		var receivedBody map[string]any
+		c, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/v1/search/documents" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			_ = json.NewDecoder(r.Body).Decode(&receivedBody)
+
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":        receivedBody["id"],
+				"namespace": receivedBody["namespace"].(string) + ":" + receivedBody["category"].(string),
+				"added":     true,
+			})
+		})
+
+		resp, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Markdown]{
+			Namespace: "insureme",
+			Category:  "policy",
+			ID:        "POL-MD-OPTS",
+			KeyName:   "primary-key",
+			Content: client.Markdown{
+				Content:                "# Header\n\nContent",
+				WithHeadingBreadcrumbs: true,
+				WithFrontmatterFields:  true,
+				HeadingWeight:          0.3,
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.ID != "POL-MD-OPTS" || !resp.Added {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+		mdObj, ok := receivedBody["markdown"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected markdown object in payload, got %T: %v", receivedBody["markdown"], receivedBody["markdown"])
+		}
+		if mdObj["content"] != "# Header\n\nContent" {
+			t.Errorf("expected content '# Header\n\nContent', got %v", mdObj["content"])
+		}
+		if mdObj["with_heading_breadcrumbs"] != true {
+			t.Errorf("expected with_heading_breadcrumbs=true, got %v", mdObj["with_heading_breadcrumbs"])
+		}
+		if mdObj["with_frontmatter_fields"] != true {
+			t.Errorf("expected with_frontmatter_fields=true, got %v", mdObj["with_frontmatter_fields"])
+		}
+		if mdObj["heading_weight"] != 0.3 {
+			t.Errorf("expected heading_weight=0.3, got %v", mdObj["heading_weight"])
+		}
+	})
+
 	t.Run("Add with Pages", func(t *testing.T) {
 		var receivedBody map[string]any
 		c, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +454,7 @@ func TestDocumentsService(t *testing.T) {
 			ID:        "CTR-100",
 			KeyName:   "primary-key",
 			Content: client.Sentences{
-				{Text: "Sentence 1", PageNumber: 1, Reference: "sec-1"},
+				{Text: "Sentence 1", PageNumber: 1, Reference: "sec-1", ReferenceWeight: 0.25},
 			},
 		})
 		if err != nil {
@@ -386,7 +476,7 @@ func TestDocumentsService(t *testing.T) {
 				t.Errorf("expected 2 sections, got %v", body["sections"])
 			}
 			sec0 := sections[0].(map[string]any)
-			if sec0["text"] != "Section 1" || sec0["reference"] != "sec-1" {
+			if sec0["text"] != "Section 1" || sec0["reference"] != "sec-1" || sec0["reference_weight"] != 0.5 {
 				t.Errorf("unexpected section 0: %v", sec0)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -402,7 +492,7 @@ func TestDocumentsService(t *testing.T) {
 			ID:        "CTR-200",
 			KeyName:   "primary-key",
 			Content: client.Sections{
-				{Text: "Section 1", Reference: "sec-1"},
+				{Text: "Section 1", Reference: "sec-1", ReferenceWeight: 0.5},
 				{Text: "Section 2", Reference: "sec-2"},
 			},
 		})
@@ -488,6 +578,24 @@ func TestDocumentsService(t *testing.T) {
 			Content:   client.Text(""),
 		}); !errors.Is(err, client.ErrMissingDocumentContent) {
 			t.Errorf("expected ErrMissingDocumentContent for empty Text, got %v", err)
+		}
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Markdown]{
+			Namespace: "insureme",
+			Category:  "policy",
+			ID:        "POL-1",
+			KeyName:   "key",
+			Content:   client.Markdown{Content: ""},
+		}); !errors.Is(err, client.ErrMissingDocumentContent) {
+			t.Errorf("expected ErrMissingDocumentContent for empty Markdown, got %v", err)
+		}
+		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Markdown]{
+			Namespace: "insureme",
+			Category:  "policy",
+			ID:        "POL-1",
+			KeyName:   "key",
+			Content:   client.Markdown{Content: "   \n\t  "},
+		}); !errors.Is(err, client.ErrMissingDocumentContent) {
+			t.Errorf("expected ErrMissingDocumentContent for whitespace Markdown, got %v", err)
 		}
 		if _, err := c.Search.Documents.Add(ctx, client.DocumentOptions[client.Pages]{
 			Namespace: "insureme",
