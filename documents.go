@@ -4,7 +4,9 @@
 package sajberpank
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -23,15 +25,17 @@ type Page struct {
 
 // Sentence represents a structured sentence with optional page tracking and citation reference.
 type Sentence struct {
-	Text       string
-	PageNumber int32
-	Reference  string
+	Text            string
+	PageNumber      int32
+	Reference       string
+	ReferenceWeight float32
 }
 
 // Section represents a coherent logical unit of a document with optional citation reference.
 type Section struct {
-	Text      string
-	Reference string
+	Text            string
+	Reference       string
+	ReferenceWeight float32
 }
 
 // Concrete content types:
@@ -40,9 +44,84 @@ type Pages []Page
 type Sentences []Sentence
 type Sections []Section
 
-// Content is a type constraint allowing only Text, Pages, Sentences, or Sections.
+// Markdown represents Markdown formatted text content with parsing and indexing options.
+type Markdown struct {
+	// Content contains the raw Markdown formatted text content.
+	Content string `json:"content"`
+	// WithHeadingBreadcrumbs, if true, constructs hierarchical ancestor heading paths
+	// (e.g. "Guide / Auth") as section references. Default is false (uses immediate section title).
+	WithHeadingBreadcrumbs bool `json:"with_heading_breadcrumbs,omitempty"`
+	// WithFrontmatterFields, if true, parses YAML frontmatter and maps key-values to document metadata fields.
+	// Default is false (ignores frontmatter; frontmatter is stripped and not mapped to fields).
+	WithFrontmatterFields bool `json:"with_frontmatter_fields,omitempty"`
+	// HeadingWeight controls the influence of headings / breadcrumb references on vector blending and ranking.
+	// Default is 0.0 (reference is metadata-only, no vector adjustment).
+	// Valid values are between 0.0 and 1.0.
+	HeadingWeight float32 `json:"heading_weight,omitzero"`
+}
+
+// MarkdownDocument is an alias for Markdown.
+type MarkdownDocument = Markdown
+
+// UnmarshalJSON implements json.Unmarshaler for Markdown, accepting either a raw JSON string
+// or an object with content and options.
+func (m *Markdown) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+
+	if trimmed[0] == '"' {
+		return json.Unmarshal(trimmed, &m.Content)
+	}
+
+	type alias struct {
+		Content                string  `json:"content"`
+		WithHeadingBreadcrumbs bool    `json:"with_heading_breadcrumbs,omitempty"`
+		WithBreadcrumbs        bool    `json:"with_breadcrumbs,omitempty"`
+		WithFrontmatterFields  bool    `json:"with_frontmatter_fields,omitempty"`
+		HeadingWeight          float32 `json:"heading_weight,omitzero"`
+	}
+	var a alias
+	if err := json.Unmarshal(trimmed, &a); err != nil {
+		return err
+	}
+	if a.WithBreadcrumbs {
+		a.WithHeadingBreadcrumbs = true
+	}
+	*m = Markdown{
+		Content:                a.Content,
+		WithHeadingBreadcrumbs: a.WithHeadingBreadcrumbs,
+		WithFrontmatterFields:  a.WithFrontmatterFields,
+		HeadingWeight:          a.HeadingWeight,
+	}
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler for Markdown, serializing as a plain string
+// if all options are at defaults (zero/false), or as an object if any option is configured.
+func (m Markdown) MarshalJSON() ([]byte, error) {
+	if !m.WithHeadingBreadcrumbs && !m.WithFrontmatterFields && m.HeadingWeight == 0 {
+		return json.Marshal(m.Content)
+	}
+	type alias struct {
+		Content                string  `json:"content"`
+		WithHeadingBreadcrumbs bool    `json:"with_heading_breadcrumbs,omitempty"`
+		WithFrontmatterFields  bool    `json:"with_frontmatter_fields,omitempty"`
+		HeadingWeight          float32 `json:"heading_weight,omitzero"`
+	}
+	withBreadcrumbs := m.WithHeadingBreadcrumbs
+	return json.Marshal(alias{
+		Content:                m.Content,
+		WithHeadingBreadcrumbs: withBreadcrumbs,
+		WithFrontmatterFields:  m.WithFrontmatterFields,
+		HeadingWeight:          m.HeadingWeight,
+	})
+}
+
+// Content is a type constraint allowing only Text, Markdown, Pages, Sentences, or Sections.
 type Content interface {
-	Text | Pages | Sentences | Sections
+	Text | Markdown | Pages | Sentences | Sections
 }
 
 // FieldValue represents a document metadata field value with an optional search weight.
@@ -91,14 +170,16 @@ type pageBody struct {
 }
 
 type sentenceBody struct {
-	Text       string `json:"text"`
-	PageNumber int32  `json:"page_number,omitempty"`
-	Reference  string `json:"reference,omitempty"`
+	Text            string  `json:"text"`
+	PageNumber      int32   `json:"page_number,omitempty"`
+	Reference       string  `json:"reference,omitempty"`
+	ReferenceWeight float32 `json:"reference_weight,omitzero"`
 }
 
 type sectionBody struct {
-	Text      string `json:"text"`
-	Reference string `json:"reference,omitempty"`
+	Text            string  `json:"text"`
+	Reference       string  `json:"reference,omitempty"`
+	ReferenceWeight float32 `json:"reference_weight,omitzero"`
 }
 
 type addDocumentRequestBody struct {
@@ -107,6 +188,7 @@ type addDocumentRequestBody struct {
 	ID              string                `json:"id"`
 	KeyName         string                `json:"key_name"`
 	Text            string                `json:"text,omitempty"`
+	Markdown        any                   `json:"markdown,omitempty"`
 	Pages           []pageBody            `json:"pages,omitempty"`
 	Sentences       []sentenceBody        `json:"sentences,omitempty"`
 	Sections        []sectionBody         `json:"sections,omitempty"`
@@ -196,6 +278,11 @@ func (s *DocumentsService) Add[C Content](ctx context.Context, o DocumentOptions
 			return nil, ErrMissingDocumentContent
 		}
 		body.Text = string(c)
+	case Markdown:
+		if strings.TrimSpace(c.Content) == "" {
+			return nil, ErrMissingDocumentContent
+		}
+		body.Markdown = c
 	case Pages:
 		if len(c) == 0 {
 			return nil, ErrMissingDocumentContent
